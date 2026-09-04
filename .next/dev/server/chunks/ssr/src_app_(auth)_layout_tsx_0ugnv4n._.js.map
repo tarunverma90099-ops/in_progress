@@ -1,0 +1,6 @@
+{
+  "version": 3,
+  "sources": [],
+  "sections": [
+    {"offset": {"line": 4, "column": 0}, "map": {"version":3,"sources":["file:///C:/Users/tarun%20verma/Downloads/build-full-stack-application/src/app/%28auth%29/layout.tsx"],"sourcesContent":["'use client';\n\nimport { ReactNode } from 'react';\nimport { AuthProvider } from '@/contexts/AuthContext';\n\nexport default function AuthLayout({ children }: { children: ReactNode }) {\n  return <AuthProvider>{children}</AuthProvider>;\n}\n"],"names":["AuthLayout","children"],"mappings":";;;;;AAGA;AAHA;;;AAKe,SAASA,WAAW,EAAEC,QAAQ,EAA2B;IACtE,qBAAO,8OAAC,+IAAY;kBAAEA;;;;;;AACxB"}}]
+}

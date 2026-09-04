@@ -1,0 +1,58 @@
+@import "tailwindcss";
+
+/* Calendar Styles */
+.react-calendar {
+  width: 100%;
+  border: none;
+  font-family: 'Inter', sans-serif;
+}
+
+.react-calendar__navigation button {
+  font-size: 1.2rem;
+  font-weight: bold;
+}
+
+.react-calendar__tile {
+  font-size: 1rem;
+  padding: 1.5em 0.5em;
+  border-radius: 8px;
+  transition: all 0.2s ease;
+}
+
+.react-calendar__tile:hover {
+  background: #f0f0f0;
+}
+
+.react-calendar__tile--active {
+  background: #2563eb !important;
+  color: white !important;
+  font-weight: bold;
+}
+
+.react-calendar__tile--now {
+  background: #dbeafe !important;
+  font-weight: bold;
+}
+
+.react-calendar__month-view__days__day--weekend {
+  color: #ef4444;
+}
+
+/* Scrollbar Styles */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f1f1;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #888;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #555;
+}
