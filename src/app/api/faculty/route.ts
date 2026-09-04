@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import bcrypt from 'bcryptjs';
 import connectDB from '@/lib/mongodb';
 import { Faculty, User } from '@/models';
 
@@ -51,22 +52,34 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Create a user account for the faculty
-    const defaultPassword = 'faculty123'; // Default password
-    const salt = await require('bcryptjs').genSalt(10);
-    const hashedPassword = await require('bcryptjs').hash(defaultPassword, salt);
+    // Check for duplicate email at the faculty level
+    const existingFaculty = await Faculty.findOne({ email: email.toLowerCase() });
+    if (existingFaculty) {
+      return NextResponse.json(
+        { error: 'Faculty with this email already exists' },
+        { status: 409 }
+      );
+    }
 
-    const newUser = await User.create({
-      email: email.toLowerCase(),
-      password: hashedPassword,
-      name,
-      role: 'teacher',
-      department,
-    });
+    // Create (or reuse) a user account for the faculty
+    const defaultPassword = 'faculty123'; // Default password
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(defaultPassword, salt);
+
+    let user = await User.findOne({ email: email.toLowerCase() });
+    if (!user) {
+      user = await User.create({
+        email: email.toLowerCase(),
+        password: hashedPassword,
+        name,
+        role: 'teacher',
+        department,
+      });
+    }
 
     // Create faculty profile
     const newFaculty = await Faculty.create({
-      userId: newUser._id,
+      userId: user._id,
       name,
       email: email.toLowerCase(),
       department,

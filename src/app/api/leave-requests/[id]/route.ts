@@ -24,7 +24,7 @@ export async function PUT(
     const updatedRequest = await LeaveRequest.findByIdAndUpdate(
       id,
       { status },
-      { new: true }
+      { returnDocument: 'after' }
     );
 
     if (!updatedRequest) {

@@ -120,6 +120,8 @@ export const classesAPI = {
 export const studentsAPI = {
   getByClass: (classId: string) => apiRequest(`/students?classId=${classId}`),
 
+  getByUser: (userId: string) => apiRequest(`/students?userId=${userId}`),
+
   create: (studentData: {
     classId: string;
     name: string;
@@ -222,6 +224,20 @@ export const sessionsAPI = {
     apiRequest('/sessions', {
       method: 'POST',
       body: sessionData,
+    }),
+
+  /** Student QR check-in: marks the student present on the session's class */
+  checkIn: (sessionId: string, studentId: string) =>
+    apiRequest(`/sessions/${sessionId}`, {
+      method: 'PUT',
+      body: { studentId },
+    }),
+
+  /** End a session: scanned students -> Present, everyone else -> Absent */
+  end: (id: string) =>
+    apiRequest(`/sessions/${id}`, {
+      method: 'PUT',
+      body: { action: 'end' },
     }),
 
   update: (id: string, updates: Record<string, unknown>) =>

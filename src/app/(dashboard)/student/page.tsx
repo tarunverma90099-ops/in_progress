@@ -23,38 +23,34 @@ import {
   Send,
   ClipboardCheck,
   Calculator,
+  ScanLine,
   Calendar as CalendarIcon,
 } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
+import { studentsAPI, attendanceAPI, leaveRequestsAPI } from '@/lib/api';
 
-const subjects = ['Mathematics', 'Env. Chemistry', 'PCS', 'BEE', 'Engineering Graphics'];
-const subjectColors: Record<string, string> = {
-  Mathematics: '#8884d8',
-  'Env. Chemistry': '#82ca9d',
-  PCS: '#ffc658',
-  BEE: '#ff8042',
-  'Engineering Graphics': '#0088FE',
-};
+const LINE_COLORS = ['#8884d8', '#82ca9d', '#ffc658', '#ff8042', '#0088FE', '#d0417e', '#7e57c2'];
 
-const generateInitialHistory = () => {
-  const pcs: Record<string, Record<string, string>> = {};
-  const startDate = new Date('2026-08-01');
-  const endDate = new Date('2026-09-10');
+interface Enrollment {
+  _id: string;
+  name: string;
+  rollNo: number;
+  attended: number;
+  total: number;
+  class: {
+    _id: string;
+    name: string;
+    teacherId: string;
+  } | null;
+}
 
-  for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
-    if (d.getDay() === 0 || d.getDay() === 6) continue;
-
-    const dateStr = d.toISOString().split('T')[0];
-    pcs[dateStr] = {};
-    subjects.forEach((subject) => {
-      const rand = Math.random();
-      if (rand < 0.05) pcs[dateStr][subject] = 'Leave';
-      else if (rand < 0.2) pcs[dateStr][subject] = 'Absent';
-      else pcs[dateStr][subject] = 'Present';
-    });
-  }
-  return pcs;
-};
+interface LeaveRequestData {
+  _id: string;
+  subject: string;
+  date: string;
+  reason: string;
+  status: 'Pending' | 'Approved' | 'Rejected';
+}
 
 // Helper components
 const CircularProgress = ({ percentage }: { percentage: number }) => {
@@ -223,7 +219,7 @@ const LeaveRequestModal = ({
   onSubmit: (data: { subject: string; date: string; reason: string; status: string }) => void;
   onClose: () => void;
 }) => {
-  const [leaveData, setLeaveData] = useState({ subject: subjects[0], date: '', reason: '' });
+  const [leaveData, setLeaveData] = useState({ subject: subjects[0] || '', date: '', reason: '' });
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -293,15 +289,22 @@ const LeaveRequestModal = ({
   );
 };
 
-const WeeklyTrendChart = ({ pcs }: { pcs: Record<string, Record<string, string>> }) => {
+const WeeklyTrendChart = ({
+  history,
+  subjects,
+}: {
+  history: Record<string, Record<string, string>>;
+  subjects: string[];
+}) => {
   const last7DaysData = useMemo(() => {
     const data = [];
-    const today = new Date('2026-09-25');
+    const today = new Date();
+
     for (let i = 6; i >= 0; i--) {
       const date = new Date(today);
       date.setDate(date.getDate() - i);
       const dateStr = date.toISOString().split('T')[0];
-      const dayData = pcs[dateStr] || {};
+      const dayData = history[dateStr] || {};
 
       const entry: Record<string, string | number> = {
         name: date.toLocaleDateString('en-GB', { weekday: 'short' }),
@@ -313,7 +316,7 @@ const WeeklyTrendChart = ({ pcs }: { pcs: Record<string, Record<string, string>>
       data.push(entry);
     }
     return data;
-  }, [pcs]);
+  }, [history, subjects]);
 
   return (
     <div className="bg-white shadow-lg rounded-2xl p-6">
@@ -325,12 +328,12 @@ const WeeklyTrendChart = ({ pcs }: { pcs: Record<string, Record<string, string>>
           <YAxis unit="%" />
           <Tooltip />
           <Legend />
-          {subjects.map((subject) => (
+          {subjects.map((subject, idx) => (
             <Line
               key={subject}
               type="monotone"
               dataKey={subject}
-              stroke={subjectColors[subject]}
+              stroke={LINE_COLORS[idx % LINE_COLORS.length]}
               strokeWidth={2}
             />
           ))}
@@ -345,30 +348,86 @@ export default function StudentDashboard() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isSimulatorModalOpen, setIsSimulatorModalOpen] = useState(false);
   const [isLeaveModalOpen, setIsLeaveModalOpen] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [pageError, setPageError] = useState('');
   const router = useRouter();
-  const { logout } = useAuth();
+  const { logout, user, isReady } = useAuth();
 
-  const [attendance] = useState([
-    { subject: 'Mathematics', attended: 18, total: 20 },
-    { subject: 'Env. Chemistry', attended: 15, total: 20 },
-    { subject: 'PCS', attended: 10, total: 20 },
-    { subject: 'BEE', attended: 20, total: 20 },
-    { subject: 'Engineering Graphics', attended: 12, total: 20 },
-  ]);
+  // Subject-wise stats come from the student's enrollments
+  const [enrollments, setEnrollments] = useState<Enrollment[]>([]);
+  // Calendar history: { 'YYYY-MM-DD': { Subject: 'Present' | 'Absent' | 'Leave' } }
+  const [attendanceHistory, setAttendanceHistory] = useState<
+    Record<string, Record<string, string>>
+  >({});
+  const [leaveRequests, setLeaveRequests] = useState<LeaveRequestData[]>([]);
+  const [selectedDate, setSelectedDate] = useState<Date>(new Date());
 
-  const initialLeaveRequests = [
-    { subject: 'PCS', date: '2026-09-24', reason: 'Medical check-up.', status: 'Approved' },
-    {
-      subject: 'Engineering Graphics',
-      date: '2026-09-26',
-      reason: 'Family function.',
-      status: 'Pending',
-    },
-  ];
+  const subjects = useMemo(
+    () =>
+      enrollments
+        .map((e) => e.class?.name)
+        .filter((name): name is string => Boolean(name)),
+    [enrollments]
+  );
 
-  const [leaveRequests, setLeaveRequests] = useState(initialLeaveRequests);
-  const [attendanceHistory] = useState(generateInitialHistory);
-  const [selectedDate, setSelectedDate] = useState<Date>(new Date('2026-09-11'));
+  const attendance = useMemo(
+    () =>
+      enrollments
+        .filter((e) => e.class)
+        .map((e) => ({ subject: e.class!.name, attended: e.attended, total: e.total })),
+    [enrollments]
+  );
+
+  const fetchData = async (userId: string) => {
+    try {
+      // 1. Enrollments (subject-wise attendance + class names)
+      const enrollResult = await studentsAPI.getByUser(userId);
+      const studentEnrollments: Enrollment[] = enrollResult.students || [];
+      setEnrollments(studentEnrollments);
+
+      // 2. Attendance history per enrollment for the calendar & trends
+      const history: Record<string, Record<string, string>> = {};
+      await Promise.all(
+        studentEnrollments.map(async (enrollment) => {
+          if (!enrollment.class) return;
+          try {
+            const result = await attendanceAPI.get({ studentId: enrollment._id });
+            const records = result.records || [];
+            records.forEach((record: { date: string; status: string }) => {
+              if (!history[record.date]) history[record.date] = {};
+              history[record.date][enrollment.class!.name] = record.status;
+            });
+          } catch (err) {
+            console.error('Error fetching attendance for', enrollment._id, err);
+          }
+        })
+      );
+      setAttendanceHistory(history);
+
+      // 3. Leave requests
+      try {
+        const leaveResult = await leaveRequestsAPI.getAll({ studentId: userId });
+        setLeaveRequests(leaveResult.leaveRequests || []);
+      } catch (err) {
+        console.error('Error fetching leave requests:', err);
+      }
+    } catch (err) {
+      console.error('Error loading dashboard:', err);
+      setPageError('Failed to load your dashboard data. Please refresh the page.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!isReady) return;
+    if (!user) {
+      router.push('/login');
+      return;
+    }
+    void Promise.resolve().then(() => fetchData(user.id));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isReady, user]);
 
   const calculatePercentage = (attended: number, total: number) =>
     total > 0 ? parseFloat(((attended / total) * 100).toFixed(1)) : 0;
@@ -384,9 +443,39 @@ export default function StudentDashboard() {
     return calculatePercentage(totalAttended, totalClasses);
   }, [attendance]);
 
-  const handleLeaveSubmit = (newRequest: { subject: string; date: string; reason: string; status: string }) => {
-    setLeaveRequests((prev) => [newRequest, ...prev]);
-    setIsLeaveModalOpen(false);
+  const handleLeaveSubmit = async (newRequest: {
+    subject: string;
+    date: string;
+    reason: string;
+    status: string;
+  }) => {
+    if (!user) return;
+    // Find the enrollment this subject belongs to
+    const enrollment = enrollments.find((e) => e.class?.name === newRequest.subject);
+    if (!enrollment?.class) {
+      alert('Unable to submit leave request: class not found.');
+      return;
+    }
+
+    try {
+      const result = await leaveRequestsAPI.create({
+        studentId: user.id,
+        studentName: user.name || enrollment.name,
+        rollNo: enrollment.rollNo,
+        subject: newRequest.subject,
+        date: newRequest.date,
+        reason: newRequest.reason,
+        classId: enrollment.class._id,
+        teacherId: enrollment.class.teacherId,
+      });
+      if (result.success) {
+        setLeaveRequests((prev) => [result.leaveRequest, ...prev]);
+        setIsLeaveModalOpen(false);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to submit leave request';
+      alert(message);
+    }
   };
 
   const handleLogout = () => {
@@ -396,10 +485,16 @@ export default function StudentDashboard() {
 
   const renderOverview = () => (
     <div>
-      <div className="mb-8 text-center">
+      <div className="mb-8 flex flex-wrap justify-center gap-4">
+        <button
+          onClick={() => router.push('/student/verify')}
+          className="bg-green-600 text-white font-bold px-8 py-4 rounded-xl shadow-lg hover:bg-green-700 transition-transform transform hover:scale-105 flex items-center gap-3 text-lg"
+        >
+          <ScanLine size={24} /> Scan QR to Mark Attendance
+        </button>
         <button
           onClick={() => setIsSimulatorModalOpen(true)}
-          className="bg-blue-600 text-white font-bold px-8 py-4 rounded-xl shadow-lg hover:bg-blue-700 transition-transform transform hover:scale-105 flex items-center gap-3 mx-auto text-lg"
+          className="bg-blue-600 text-white font-bold px-8 py-4 rounded-xl shadow-lg hover:bg-blue-700 transition-transform transform hover:scale-105 flex items-center gap-3 text-lg"
         >
           <Calculator size={24} /> Attendance Simulator
         </button>
@@ -420,37 +515,43 @@ export default function StudentDashboard() {
         </div>
       </div>
       <h2 className="text-xl font-bold mb-4">Subject-wise Overview</h2>
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {attendance.map((subj, idx) => {
-          const percentage = calculatePercentage(subj.attended, subj.total);
-          const needsImprovement = percentage < 75;
-          const classesNeeded = needsImprovement ? calculateClassesNeeded(subj.attended, subj.total) : 0;
-          return (
-            <div key={idx} className="bg-white shadow-lg rounded-2xl p-6 flex flex-col items-center">
-              <h3 className="text-xl font-semibold mb-2">{subj.subject}</h3>
-              <p className="text-gray-600">
-                {subj.attended}/{subj.total} classes attended
-              </p>
-              <p
-                className={`mt-3 text-lg font-bold ${
-                  needsImprovement ? 'text-red-600' : 'text-green-600'
-                }`}
-              >
-                {percentage}%
-              </p>
-              {needsImprovement && (
-                <div className="mt-4 text-center text-xs bg-yellow-100 text-yellow-800 p-2 rounded-lg flex items-center gap-2">
-                  <TrendingUp size={16} />
-                  <span>
-                    Attend the next <strong>{classesNeeded}</strong> class
-                    {classesNeeded > 1 ? 'es' : ''} to reach 75%.
-                  </span>
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
+      {attendance.length === 0 ? (
+        <div className="bg-white shadow-lg rounded-2xl p-10 text-center text-gray-500">
+          You are not enrolled in any class yet.
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {attendance.map((subj) => {
+            const percentage = calculatePercentage(subj.attended, subj.total);
+            const needsImprovement = percentage < 75;
+            const classesNeeded = needsImprovement ? calculateClassesNeeded(subj.attended, subj.total) : 0;
+            return (
+              <div key={subj.subject} className="bg-white shadow-lg rounded-2xl p-6 flex flex-col items-center">
+                <h3 className="text-xl font-semibold mb-2">{subj.subject}</h3>
+                <p className="text-gray-600">
+                  {subj.attended}/{subj.total} classes attended
+                </p>
+                <p
+                  className={`mt-3 text-lg font-bold ${
+                    needsImprovement ? 'text-red-600' : 'text-green-600'
+                  }`}
+                >
+                  {percentage}%
+                </p>
+                {needsImprovement && (
+                  <div className="mt-4 text-center text-xs bg-yellow-100 text-yellow-800 p-2 rounded-lg flex items-center gap-2">
+                    <TrendingUp size={16} />
+                    <span>
+                      Attend the next <strong>{classesNeeded}</strong> class
+                      {classesNeeded > 1 ? 'es' : ''} to reach 75%.
+                    </span>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 
@@ -526,7 +627,7 @@ export default function StudentDashboard() {
             )}
           </div>
         </div>
-        <WeeklyTrendChart pcs={attendanceHistory} />
+        <WeeklyTrendChart history={attendanceHistory} subjects={subjects} />
       </div>
     );
   };
@@ -543,54 +644,55 @@ export default function StudentDashboard() {
         </button>
       </div>
       <div className="bg-white shadow-lg rounded-2xl p-6">
-        <table className="w-full text-left">
-          <thead>
-            <tr className="border-b">
-              <th className="p-4">Subject</th>
-              <th className="p-4">Date</th>
-              <th className="p-4">Reason</th>
-              <th className="p-4">Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {leaveRequests.map((req, idx) => (
-              <tr key={idx} className="border-b last:border-b-0">
-                <td className="p-4 font-semibold">{req.subject}</td>
-                <td className="p-4">{req.date}</td>
-                <td className="p-4 text-sm text-gray-600">{req.reason}</td>
-                <td className="p-4">
-                  <span
-                    className={`font-bold px-2 py-1 rounded-full text-xs ${
-                      req.status === 'Approved'
-                        ? 'bg-green-100 text-green-800'
-                        : req.status === 'Rejected'
-                        ? 'bg-red-100 text-red-800'
-                        : 'bg-yellow-100 text-yellow-800'
-                    }`}
-                  >
-                    {req.status}
-                  </span>
-                </td>
+        {leaveRequests.length === 0 ? (
+          <p className="text-center text-gray-500 py-8">
+            You have not submitted any leave requests yet.
+          </p>
+        ) : (
+          <table className="w-full text-left">
+            <thead>
+              <tr className="border-b">
+                <th className="p-4">Subject</th>
+                <th className="p-4">Date</th>
+                <th className="p-4">Reason</th>
+                <th className="p-4">Status</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {leaveRequests.map((req) => (
+                <tr key={req._id} className="border-b last:border-b-0">
+                  <td className="p-4 font-semibold">{req.subject}</td>
+                  <td className="p-4">{req.date}</td>
+                  <td className="p-4 text-sm text-gray-600">{req.reason}</td>
+                  <td className="p-4">
+                    <span
+                      className={`font-bold px-2 py-1 rounded-full text-xs ${
+                        req.status === 'Approved'
+                          ? 'bg-green-100 text-green-800'
+                          : req.status === 'Rejected'
+                          ? 'bg-red-100 text-red-800'
+                          : 'bg-yellow-100 text-yellow-800'
+                      }`}
+                    >
+                      {req.status}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
     </div>
   );
 
-  const ActiveViewComponent = () => {
-    switch (activeView) {
-      case 'overview':
-        return renderOverview();
-      case 'attendance':
-        return renderAttendanceCalendar();
-      case 'leave':
-        return renderLeaveRequests();
-      default:
-        return renderOverview();
-    }
-  };
+  if (loading || !isReady) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-100">
+        <p className="text-xl text-gray-600">Loading your dashboard...</p>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen flex bg-gray-100">
@@ -607,13 +709,14 @@ export default function StudentDashboard() {
       )}
       {isLeaveModalOpen && (
         <LeaveRequestModal
-          subjects={attendance.map((a) => a.subject)}
+          subjects={subjects}
           onSubmit={handleLeaveSubmit}
           onClose={() => setIsLeaveModalOpen(false)}
         />
       )}
       <aside className="w-64 bg-orange-700 text-white flex flex-col p-6">
-        <h2 className="text-2xl font-bold mb-8">Student Dashboard</h2>
+        <h2 className="text-2xl font-bold mb-2">Student Dashboard</h2>
+        {user && <p className="text-orange-200 text-sm mb-6">{user.name}</p>}
         <nav className="flex-1 space-y-4">
           <button
             onClick={() => setActiveView('overview')}
@@ -648,8 +751,17 @@ export default function StudentDashboard() {
         </button>
       </aside>
       <main className="flex-1 p-8">
-        <h1 className="text-3xl font-bold mb-6">Welcome, Student</h1>
-        <ActiveViewComponent />
+        <h1 className="text-3xl font-bold mb-6">
+          Welcome{user ? `, ${user.name}` : ', Student'}
+        </h1>
+        {pageError && (
+          <div className="mb-6 p-4 bg-red-100 border border-red-300 text-red-700 rounded-lg text-sm">
+            {pageError}
+          </div>
+        )}
+        {activeView === 'overview' && renderOverview()}
+        {activeView === 'attendance' && renderAttendanceCalendar()}
+        {activeView === 'leave' && renderLeaveRequests()}
       </main>
     </div>
   );

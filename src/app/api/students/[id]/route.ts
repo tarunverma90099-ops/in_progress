@@ -16,7 +16,7 @@ export async function PUT(
     const updatedStudent = await Student.findByIdAndUpdate(
       id,
       { $set: body },
-      { new: true, runValidators: true }
+      { returnDocument: 'after', runValidators: true }
     );
 
     if (!updatedStudent) {

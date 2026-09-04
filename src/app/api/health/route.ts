@@ -1,13 +1,18 @@
-import { db } from "@/db";
-import { sql } from "drizzle-orm";
+import connectDB from '@/lib/mongodb';
+import mongoose from 'mongoose';
 
-export const dynamic = "force-dynamic";
+export const dynamic = 'force-dynamic';
 
 export async function GET() {
   try {
-    await db.execute(sql`select 1`);
-    return Response.json({ ok: true });
-  } catch {
-    return Response.json({ ok: false }, { status: 500 });
+    await connectDB();
+    return Response.json({
+      ok: true,
+      database: 'mongodb',
+      readyState: mongoose.connection.readyState,
+    });
+  } catch (error) {
+    console.error('Health check failed:', error);
+    return Response.json({ ok: false, error: 'Database not reachable' }, { status: 500 });
   }
 }

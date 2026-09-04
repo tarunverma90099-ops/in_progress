@@ -49,7 +49,7 @@ export async function PUT(
     const updatedClass = await Class.findByIdAndUpdate(
       id,
       { $set: body },
-      { new: true, runValidators: true }
+      { returnDocument: 'after', runValidators: true }
     );
 
     if (!updatedClass) {

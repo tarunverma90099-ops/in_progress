@@ -1,7 +1,7 @@
 'use client';
 
 import { useParams, useRouter } from 'next/navigation';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { facultyAPI } from '@/lib/api';
 
 interface FacultyData {
@@ -31,11 +31,7 @@ export default function FacultyProfile() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isRemoveModalOpen, setIsRemoveModalOpen] = useState(false);
 
-  useEffect(() => {
-    fetchFaculty();
-  }, [id]);
-
-  const fetchFaculty = async () => {
+  const fetchFaculty = useCallback(async () => {
     try {
       const result = await facultyAPI.getById(id as string);
       if (result.success) {
@@ -46,7 +42,11 @@ export default function FacultyProfile() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [id]);
+
+  useEffect(() => {
+    void Promise.resolve().then(() => fetchFaculty());
+  }, [fetchFaculty]);
 
   if (loading) {
     return (
@@ -122,6 +122,7 @@ export default function FacultyProfile() {
       <div className="max-w-3xl mx-auto bg-white shadow-lg rounded-2xl p-8 mt-6">
         {/* Faculty Info */}
         <div className="flex flex-col items-center">
+          {/* eslint-disable-next-line @next/next/no-img-element -- faculty photo URLs are arbitrary user-supplied hosts */}
           <img
             src={selectedFaculty.photo}
             alt={selectedFaculty.name}
