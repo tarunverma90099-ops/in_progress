@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import connectDB from '@/lib/mongodb';
-import { Faculty } from '@/models';
+import { Faculty, User } from '@/models';
 
 // GET single faculty by ID
 export async function GET(
@@ -47,7 +47,7 @@ export async function PUT(
     const updatedFaculty = await Faculty.findByIdAndUpdate(
       id,
       { $set: body },
-      { new: true, runValidators: true }
+      { returnDocument: 'after', runValidators: true }
     );
 
     if (!updatedFaculty) {
@@ -86,6 +86,14 @@ export async function DELETE(
         { error: 'Faculty not found' },
         { status: 404 }
       );
+    }
+
+    // Also remove the faculty's linked user account (if not linked to other profiles)
+    if (deletedFaculty.userId) {
+      const stillLinked = await Faculty.findOne({ userId: deletedFaculty.userId });
+      if (!stillLinked) {
+        await User.findByIdAndDelete(deletedFaculty.userId);
+      }
     }
 
     return NextResponse.json({

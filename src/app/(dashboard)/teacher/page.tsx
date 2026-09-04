@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Calendar from 'react-calendar';
 import {
@@ -32,61 +32,46 @@ import {
   XCircle,
 } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
+import {
+  classesAPI,
+  studentsAPI,
+  attendanceAPI,
+  leaveRequestsAPI,
+} from '@/lib/api';
 
-// --- MOCK DATA GENERATION & CONFIG ---
-const generateFullSessionHistory = (totalStudents: number) => {
-  const history = [];
-  const startDate = new Date('2025-08-01');
-  const today = new Date('2025-09-25');
-  const blankDate = '2025-09-26';
+const LINE_COLORS = ['#8884d8', '#82ca9d', '#ffc658', '#ff8042', '#0088FE', '#d0417e', '#7e57c2'];
 
-  for (let d = new Date(startDate); d <= today; d.setDate(d.getDate() + 1)) {
-    const dateStr = d.toISOString().split('T')[0];
-    if (d.getDay() === 0 || d.getDay() === 6 || dateStr === blankDate) continue;
-    const present = Math.floor(totalStudents * (0.6 + Math.random() * 0.4));
-    history.push({ date: dateStr, present });
-  }
-  return history;
-};
+interface SessionHistoryEntry {
+  date: string;
+  present: number;
+}
 
-const initialLeaveRequests = [
-  {
-    id: 1,
-    studentName: 'Prakhar',
-    rollNo: 104,
-    subject: 'BEE',
-    date: '2025-09-29',
-    reason: 'Medical appointment',
-    status: 'Pending',
-  },
-  {
-    id: 2,
-    studentName: 'Tarun',
-    rollNo: 102,
-    subject: 'BEE',
-    date: '2025-09-26',
-    reason: "Scheduled doctor's appointment.",
-    status: 'Pending',
-  },
-  {
-    id: 3,
-    studentName: 'Tilak',
-    rollNo: 204,
-    subject: 'Embedded System',
-    date: '2025-09-23',
-    reason: 'Personal work',
-    status: 'Approved',
-  },
-  {
-    id: 4,
-    studentName: 'Khilesh',
-    rollNo: 201,
-    subject: 'Embedded System',
-    date: '2025-09-22',
-    reason: 'Not feeling well',
-    status: 'Rejected',
-  },
-];
+interface StudentData {
+  _id: string;
+  name: string;
+  rollNo: number;
+  attended: number;
+  total: number;
+  email?: string;
+}
+
+interface ClassData {
+  _id: string;
+  name: string;
+  totalStudents: number;
+  sessionHistory: SessionHistoryEntry[];
+  students: StudentData[];
+}
+
+interface LeaveRequestData {
+  _id: string;
+  studentName: string;
+  rollNo: number;
+  subject: string;
+  date: string;
+  reason: string;
+  status: 'Pending' | 'Approved' | 'Rejected';
+}
 
 const MiniCircularProgress = ({ percentage, size = 32 }: { percentage: number; size?: number }) => {
   const radius = size / 2 - 4;
@@ -125,16 +110,10 @@ const MiniCircularProgress = ({ percentage, size = 32 }: { percentage: number; s
   );
 };
 
-interface ClassData {
-  totalStudents: number;
-  sessionHistory: { date: string; present: number }[];
-}
-
-const WeeklyTrendChart = ({ classes }: { classes: Record<string, ClassData> }) => {
-  const classNames = Object.keys(classes);
+const WeeklyTrendChart = ({ classes }: { classes: ClassData[] }) => {
   const last7DaysData = useMemo(() => {
     const data = [];
-    const today = new Date('2025-09-25');
+    const today = new Date();
 
     for (let i = 6; i >= 0; i--) {
       const date = new Date(today);
@@ -144,36 +123,31 @@ const WeeklyTrendChart = ({ classes }: { classes: Record<string, ClassData> }) =
         date: date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }),
       };
 
-      classNames.forEach((className) => {
-        const classData = classes[className];
-        const session = classData.sessionHistory.find((s) => s.date === dateStr);
+      classes.forEach((cls) => {
+        const session = cls.sessionHistory.find((s) => s.date === dateStr);
+        const effectiveTotal = cls.students.length || cls.totalStudents;
 
         if (session) {
-          entry[className] = parseFloat(
-            ((session.present / classData.totalStudents) * 100).toFixed(1)
-          );
+          entry[cls.name] = effectiveTotal
+            ? parseFloat(((session.present / effectiveTotal) * 100).toFixed(1))
+            : 0;
         } else {
-          let lastKnownValue = null;
-          const reversedHistory = [...classData.sessionHistory].reverse();
+          let lastKnownValue: number | null = null;
+          const reversedHistory = [...cls.sessionHistory].reverse();
           const lastSessionBeforeDate = reversedHistory.find((s) => new Date(s.date) < date);
 
-          if (lastSessionBeforeDate) {
+          if (lastSessionBeforeDate && effectiveTotal) {
             lastKnownValue = parseFloat(
-              ((lastSessionBeforeDate.present / classData.totalStudents) * 100).toFixed(1)
+              ((lastSessionBeforeDate.present / effectiveTotal) * 100).toFixed(1)
             );
           }
-          entry[className] = lastKnownValue;
+          entry[cls.name] = lastKnownValue;
         }
       });
       data.push(entry);
     }
     return data;
   }, [classes]);
-
-  const subjectColors: Record<string, string> = {
-    'Digital Circuits': '#8884d8',
-    'Embedded System': '#82ca9d',
-  };
 
   return (
     <div className="bg-white shadow-2xl rounded-2xl p-6">
@@ -182,15 +156,15 @@ const WeeklyTrendChart = ({ classes }: { classes: Record<string, ClassData> }) =
         <LineChart data={last7DaysData} margin={{ top: 5, right: 20, left: -10, bottom: 5 }}>
           <CartesianGrid strokeDasharray="3 3" />
           <XAxis dataKey="date" />
-          <YAxis unit="%" domain={[50, 100]} />
+          <YAxis unit="%" />
           <Tooltip />
           <Legend />
-          {classNames.map((name) => (
+          {classes.map((cls, idx) => (
             <Line
-              key={name}
+              key={cls._id}
               type="monotone"
-              dataKey={name}
-              stroke={subjectColors[name] || '#000000'}
+              dataKey={cls.name}
+              stroke={LINE_COLORS[idx % LINE_COLORS.length]}
               strokeWidth={3}
               dot={{ r: 4 }}
               activeDot={{ r: 8 }}
@@ -203,84 +177,29 @@ const WeeklyTrendChart = ({ classes }: { classes: Record<string, ClassData> }) =
   );
 };
 
-interface StudentData {
-  name: string;
-  rollNo: number;
-  attended: number;
-  total: number;
-  email?: string;
-}
-
 export default function TeacherDashboard() {
   const [activeView, setActiveView] = useState('overview');
   const router = useRouter();
-  const { logout } = useAuth();
+  const { logout, user, isReady } = useAuth();
 
-  const [studentsBySubject, setStudentsBySubject] = useState<Record<string, StudentData[]>>({
-    'Digital Circuits': [
-      { name: 'Nitish', rollNo: 101, attended: 18, total: 20 },
-      { name: 'Tilak', rollNo: 102, attended: 14, total: 20 },
-      { name: 'Mukesh', rollNo: 103, attended: 20, total: 20 },
-      { name: 'Prakhar', rollNo: 104, attended: 9, total: 20 },
-      { name: 'Anitesh', rollNo: 105, attended: 16, total: 20 },
-    ],
-    'Embedded System': [
-      { name: 'Tarun', rollNo: 201, attended: 15, total: 20 },
-      { name: 'Tilak', rollNo: 202, attended: 19, total: 20 },
-      { name: 'Nitish', rollNo: 203, attended: 14, total: 20 },
-      { name: 'Mukesh', rollNo: 204, attended: 17, total: 20 },
-      { name: 'Anitesh', rollNo: 205, attended: 18, total: 20 },
-    ],
-  });
-
-  const atRiskStudents = useMemo(() => {
-    const students: (StudentData & { subject: string })[] = [];
-    const seen = new Set<number>();
-    Object.keys(studentsBySubject).forEach((subject) => {
-      studentsBySubject[subject].forEach((student) => {
-        const percentage = (student.attended / student.total) * 100;
-        if (percentage < 75 && !seen.has(student.rollNo)) {
-          students.push({ ...student, subject });
-          seen.add(student.rollNo);
-        }
-      });
-    });
-    return students;
-  }, [studentsBySubject]);
-
-  const handleRemoveStudent = (subject: string, rollNoToRemove: number) => {
-    setStudentsBySubject((prev) => ({
-      ...prev,
-      [subject]: prev[subject].filter((s) => s.rollNo !== rollNoToRemove),
-    }));
-  };
-
-  const [classes, setClasses] = useState<Record<string, ClassData>>({
-    'Digital Circuits': { totalStudents: 40, sessionHistory: generateFullSessionHistory(40) },
-    'Embedded System': { totalStudents: 35, sessionHistory: generateFullSessionHistory(35) },
-  });
-
-  const sessionDates = useMemo(() => {
-    const dates = new Set<string>();
-    Object.values(classes).forEach((classData) => {
-      classData.sessionHistory.forEach((session) => dates.add(session.date));
-    });
-    return dates;
-  }, [classes]);
+  const [classes, setClasses] = useState<ClassData[]>([]);
+  const [leaveRequests, setLeaveRequests] = useState<LeaveRequestData[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [pageError, setPageError] = useState('');
+  const [leaveFilter, setLeaveFilter] = useState('Pending');
 
   const [openMenuKey, setOpenMenuKey] = useState<string | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [newClassName, setNewClassName] = useState('');
   const [isAttendanceModalOpen, setIsAttendanceModalOpen] = useState(false);
   const [selectedConstraints, setSelectedConstraints] = useState<string[]>([]);
-  const [attendanceSubject, setAttendanceSubject] = useState<string | null>(null);
+  const [attendanceClass, setAttendanceClass] = useState<ClassData | null>(null);
   const [isAtRiskModalOpen, setIsAtRiskModalOpen] = useState(false);
   const [isAddStudentModalOpen, setIsAddStudentModalOpen] = useState(false);
   const [isRenameModalOpen, setIsRenameModalOpen] = useState(false);
   const [isManualEntryModalOpen, setIsManualEntryModalOpen] = useState(false);
-  const [currentClass, setCurrentClass] = useState<string | null>(null);
+  const [currentClass, setCurrentClass] = useState<ClassData | null>(null);
   const [currentStudent, setCurrentStudent] = useState<StudentData | null>(null);
-  const [currentSubject, setCurrentSubject] = useState<string | null>(null);
   const [manualEntryData, setManualEntryData] = useState({
     date: new Date().toISOString().split('T')[0],
     status: 'Present',
@@ -288,16 +207,67 @@ export default function TeacherDashboard() {
   });
   const [newStudent, setNewStudent] = useState({ name: '', rollNo: '', email: '' });
   const [renameValue, setRenameValue] = useState('');
-  const [selectedCalendarDate, setSelectedCalendarDate] = useState<Date>(new Date('2025-09-25'));
-  const [leaveRequests, setLeaveRequests] = useState(initialLeaveRequests);
+  const [selectedCalendarDate, setSelectedCalendarDate] = useState<Date>(new Date());
+  const [submitting, setSubmitting] = useState(false);
+
   const pendingLeaveCount = useMemo(
     () => leaveRequests.filter((req) => req.status === 'Pending').length,
     [leaveRequests]
   );
 
+  const sessionDates = useMemo(() => {
+    const dates = new Set<string>();
+    classes.forEach((cls) => {
+      cls.sessionHistory.forEach((session) => dates.add(session.date));
+    });
+    return dates;
+  }, [classes]);
+
   const calculatePercentage = (present: number, total: number) =>
     total > 0 ? parseFloat(((present / total) * 100).toFixed(1)) : 0;
 
+  // ---------- Data loading ----------
+  const fetchDashboardData = async (teacherId: string) => {
+    try {
+      const classResult = await classesAPI.getAll(teacherId);
+      const fetchedClasses: ClassData[] = (classResult.classes || []).map(
+        (cls: {
+          _id: string;
+          name: string;
+          totalStudents: number;
+          sessionHistory?: SessionHistoryEntry[];
+          students?: StudentData[];
+        }) => ({
+          _id: cls._id,
+          name: cls.name,
+          totalStudents: cls.totalStudents,
+          sessionHistory: cls.sessionHistory || [],
+          students: cls.students || [],
+        })
+      );
+      setClasses(fetchedClasses);
+
+      const leaveResult = await leaveRequestsAPI.getAll({ teacherId });
+      setLeaveRequests(leaveResult.leaveRequests || []);
+    } catch (err) {
+      console.error('Error loading dashboard:', err);
+      setPageError('Failed to load your dashboard data. Please refresh the page.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!isReady) return;
+    if (!user) {
+      router.push('/login');
+      return;
+    }
+    void Promise.resolve().then(() => fetchDashboardData(user.id));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isReady, user]);
+
+  // ---------- Actions (all backed by the API) ----------
   const handleLogout = () => {
     logout();
     router.push('/login');
@@ -310,185 +280,258 @@ export default function TeacherDashboard() {
   };
 
   const handleContinueAttendance = () => {
-    if (attendanceSubject) {
-      router.push(`/teacher/session/${encodeURIComponent(attendanceSubject)}`);
+    if (attendanceClass) {
+      router.push(`/teacher/session/${encodeURIComponent(attendanceClass.name)}`);
       setIsAttendanceModalOpen(false);
       setSelectedConstraints([]);
-      setAttendanceSubject(null);
+      setAttendanceClass(null);
     }
   };
 
-  const handleAddClass = () => {
-    if (newClassName.trim() !== '') {
-      const subjectKey = newClassName.trim();
-      setClasses((prev) => ({
-        ...prev,
-        [subjectKey]: {
-          totalStudents: 40,
-          sessionHistory: [{ date: new Date().toISOString().split('T')[0], present: 0 }],
-        },
-      }));
-      setStudentsBySubject((prev) => ({ ...prev, [subjectKey]: [] }));
-      setNewClassName('');
-      setIsModalOpen(false);
+  const handleAddClass = async () => {
+    const name = newClassName.trim();
+    if (!name || !user) return;
+    setSubmitting(true);
+    try {
+      const result = await classesAPI.create({ name, teacherId: user.id });
+      if (result.success) {
+        setClasses((prev) => [...prev, { ...result.class, students: [], sessionHistory: result.class.sessionHistory || [] }]);
+        setNewClassName('');
+        setIsModalOpen(false);
+      }
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Failed to create class');
+    } finally {
+      setSubmitting(false);
     }
   };
 
-  const handleRemoveClass = (subjectKey: string) => {
-    setClasses((prev) => {
-      const newClasses = { ...prev };
-      delete newClasses[subjectKey];
-      return newClasses;
-    });
-    setStudentsBySubject((prev) => {
-      const newStudents = { ...prev };
-      delete newStudents[subjectKey];
-      return newStudents;
-    });
-    setOpenMenuKey(null);
+  const handleRemoveClass = async (cls: ClassData) => {
+    if (!confirm(`Remove class "${cls.name}" and all of its students?`)) return;
+    try {
+      await classesAPI.delete(cls._id);
+      setClasses((prev) => prev.filter((c) => c._id !== cls._id));
+      setOpenMenuKey(null);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Failed to remove class');
+    }
   };
 
-  const handleAddStudentSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newStudent.name || !newStudent.rollNo) return;
-    setStudentsBySubject((prev) => ({
-      ...prev,
-      [currentClass!]: [
-        ...(prev[currentClass!] || []),
-        { ...newStudent, attended: 0, total: 0, rollNo: parseInt(newStudent.rollNo) },
-      ],
-    }));
-    setNewStudent({ name: '', rollNo: '', email: '' });
-    setIsAddStudentModalOpen(false);
-    setCurrentClass(null);
-  };
-
-  const handleRenameSubmit = (e: React.FormEvent) => {
+  const handleRenameSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const newName = renameValue.trim();
-    if (!newName || newName === currentClass) return;
-    setClasses((prev) => {
-      const newClasses = { ...prev };
-      const data = newClasses[currentClass!];
-      delete newClasses[currentClass!];
-      newClasses[newName] = data;
-      return newClasses;
-    });
-    setStudentsBySubject((prev) => {
-      const newStudents = { ...prev };
-      const data = newStudents[currentClass!];
-      delete newStudents[currentClass!];
-      newStudents[newName] = data;
-      return newStudents;
-    });
-    setRenameValue('');
-    setIsRenameModalOpen(false);
-    setCurrentClass(null);
-  };
-
-  const handleManualEntrySubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    setStudentsBySubject((prev) => {
-      const newStudents = { ...prev };
-      const studentList = newStudents[currentSubject!];
-      const studentIndex = studentList.findIndex((s) => s.rollNo === currentStudent!.rollNo);
-      if (studentIndex !== -1) {
-        const updatedStudent = { ...studentList[studentIndex] };
-        updatedStudent.total += 1;
-        if (manualEntryData.status === 'Present') {
-          updatedStudent.attended += 1;
-        }
-        studentList[studentIndex] = updatedStudent;
+    if (!newName || !currentClass || newName === currentClass.name) return;
+    setSubmitting(true);
+    try {
+      const result = await classesAPI.update(currentClass._id, { name: newName });
+      if (result.success) {
+        setClasses((prev) =>
+          prev.map((c) => (c._id === currentClass._id ? { ...c, name: newName } : c))
+        );
+        setRenameValue('');
+        setIsRenameModalOpen(false);
+        setCurrentClass(null);
       }
-      return newStudents;
-    });
-    setIsManualEntryModalOpen(false);
-    setCurrentStudent(null);
-    setCurrentSubject(null);
-    setManualEntryData({
-      date: new Date().toISOString().split('T')[0],
-      status: 'Present',
-      reason: '',
-    });
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Failed to rename class');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
-  const handleLeaveRequestAction = (requestId: number, newStatus: string) => {
-    setLeaveRequests((prev) =>
-      prev.map((req) => (req.id === requestId ? { ...req, status: newStatus } : req))
-    );
+  const handleAddStudentSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentClass || !newStudent.name || !newStudent.rollNo) return;
+    setSubmitting(true);
+    try {
+      const result = await studentsAPI.create({
+        classId: currentClass._id,
+        name: newStudent.name,
+        rollNo: parseInt(newStudent.rollNo, 10),
+        email: newStudent.email || undefined,
+      });
+      if (result.success) {
+        const created = result.student;
+        setClasses((prev) =>
+          prev.map((c) =>
+            c._id === currentClass._id
+              ? {
+                  ...c,
+                  students: [...c.students, { ...created, attended: created.attended ?? 0, total: created.total ?? 0 }],
+                }
+              : c
+          )
+        );
+        setNewStudent({ name: '', rollNo: '', email: '' });
+        setIsAddStudentModalOpen(false);
+        setCurrentClass(null);
+      }
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Failed to add student');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
-  const downloadCSV = (subject: string) => {
-    const students = studentsBySubject[subject];
+  const handleRemoveStudent = async (cls: ClassData, student: StudentData) => {
+    if (!confirm(`Remove ${student.name} from ${cls.name}?`)) return;
+    try {
+      await studentsAPI.delete(student._id);
+      setClasses((prev) =>
+        prev.map((c) =>
+          c._id === cls._id ? { ...c, students: c.students.filter((s) => s._id !== student._id) } : c
+        )
+      );
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Failed to remove student');
+    }
+  };
+
+  const handleManualEntrySubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentClass || !currentStudent) return;
+    setSubmitting(true);
+    try {
+      const result = await attendanceAPI.mark({
+        classId: currentClass._id,
+        date: manualEntryData.date,
+        attendanceData: [{ studentId: currentStudent._id, status: manualEntryData.status }],
+      });
+      if (result.success) {
+        setClasses((prev) =>
+          prev.map((c) => {
+            if (c._id !== currentClass._id) return c;
+            return {
+              ...c,
+              students: c.students.map((s) => {
+                if (s._id !== currentStudent._id) return s;
+                // Refresh stats from server response when available
+                if (result.results?.[0]?.student) {
+                  return result.results[0].student;
+                }
+                return {
+                  ...s,
+                  total: s.total + 1,
+                  attended: s.attended + (manualEntryData.status === 'Present' ? 1 : 0),
+                };
+              }),
+            };
+          })
+        );
+        setIsManualEntryModalOpen(false);
+        setCurrentStudent(null);
+        setCurrentClass(null);
+        setManualEntryData({
+          date: new Date().toISOString().split('T')[0],
+          status: 'Present',
+          reason: '',
+        });
+      }
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Failed to mark attendance');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleLeaveRequestAction = async (requestId: string, newStatus: string) => {
+    try {
+      const result = await leaveRequestsAPI.updateStatus(requestId, newStatus);
+      if (result.success) {
+        setLeaveRequests((prev) =>
+          prev.map((req) => (req._id === requestId ? { ...req, status: newStatus as LeaveRequestData['status'] } : req))
+        );
+      }
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Failed to update leave request');
+    }
+  };
+
+  const downloadCSV = (cls: ClassData) => {
+    const students = cls.students;
     if (!students || students.length === 0) {
-      alert('No data available for ' + subject);
+      alert('No data available for ' + cls.name);
       return;
     }
 
-    let csv = 'Name,Roll No,Attended,Total,Percentage\n';
+    let csv = 'Name,Roll No,Email,Attended,Total,Percentage\n';
     students.forEach((student) => {
       const percentage = calculatePercentage(student.attended, student.total);
-      csv += `"${student.name}",${student.rollNo},${student.attended},${student.total},${percentage}%\n`;
+      csv += `"${student.name}",${student.rollNo},"${student.email || ''}",${student.attended},${student.total},${percentage}%\n`;
     });
 
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.setAttribute('download', `${subject.replace(/\s+/g, '_')}_attendance.csv`);
+    link.setAttribute('download', `${cls.name.replace(/\s+/g, '_')}_attendance.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
   };
 
-  const renderOverview = () => {
-    const classEntries = Object.entries(classes);
-    return (
-      <div>
-        <div className="mb-8 flex flex-wrap justify-center gap-4">
-          <button
-            onClick={() => setIsModalOpen(true)}
-            className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
-          >
-            <PlusCircle size={18} /> Start New Class
-          </button>
-          <button
-            onClick={() => setIsAtRiskModalOpen(true)}
-            className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
-          >
-            <AlertTriangle size={18} /> View At-Risk Students
-          </button>
+  const atRiskStudents = useMemo(() => {
+    const students: (StudentData & { subject: string })[] = [];
+    const seen = new Set<string>();
+    classes.forEach((cls) => {
+      cls.students.forEach((student) => {
+        const percentage = student.total ? (student.attended / student.total) * 100 : 100;
+        if (percentage < 75 && !seen.has(student._id)) {
+          students.push({ ...student, subject: cls.name });
+          seen.add(student._id);
+        }
+      });
+    });
+    return students;
+  }, [classes]);
+
+  // ---------- Views ----------
+  const renderOverview = () => (
+    <div>
+      <div className="mb-8 flex flex-wrap justify-center gap-4">
+        <button
+          onClick={() => setIsModalOpen(true)}
+          className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
+        >
+          <PlusCircle size={18} /> Start New Class
+        </button>
+        <button
+          onClick={() => setIsAtRiskModalOpen(true)}
+          className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
+        >
+          <AlertTriangle size={18} /> View At-Risk Students
+        </button>
+      </div>
+      <p className="text-gray-600 mb-6">Here&apos;s an overview of your recent classes:</p>
+      {classes.length === 0 ? (
+        <div className="bg-white shadow-lg rounded-2xl p-10 text-center text-gray-500">
+          You haven&apos;t created any classes yet. Click &quot;Start New Class&quot; to begin.
         </div>
-        <p className="text-gray-600 mb-6">Here&apos;s an overview of your recent classes:</p>
+      ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {classEntries.map(([subject, classData]) => {
+          {classes.map((cls) => {
+            const effectiveTotal = cls.students.length || cls.totalStudents;
             const latestSession =
-              classData.sessionHistory.length > 0
-                ? classData.sessionHistory[classData.sessionHistory.length - 1]
-                : { present: 0, totalStudents: classData.totalStudents, date: 'N/A' };
-            const attendancePercent = calculatePercentage(
-              latestSession.present,
-              classData.totalStudents
-            );
+              cls.sessionHistory.length > 0
+                ? cls.sessionHistory[cls.sessionHistory.length - 1]
+                : { present: 0, date: 'N/A' };
+            const attendancePercent = calculatePercentage(latestSession.present, effectiveTotal);
             return (
-              <div
-                key={subject}
-                className="bg-white shadow-lg rounded-2xl p-6 flex flex-col relative"
-              >
+              <div key={cls._id} className="bg-white shadow-lg rounded-2xl p-6 flex flex-col relative">
                 <div className="absolute top-4 right-4">
                   <button
-                    onClick={() => setOpenMenuKey(openMenuKey === subject ? null : subject)}
+                    onClick={() => setOpenMenuKey(openMenuKey === cls._id ? null : cls._id)}
                   >
                     <MoreVertical size={20} className="text-gray-500" />
                   </button>
-                  {openMenuKey === subject && (
+                  {openMenuKey === cls._id && (
                     <div className="absolute right-0 mt-2 w-48 bg-white rounded-md shadow-lg z-20 py-1">
                       <button
                         onClick={() => {
                           setIsRenameModalOpen(true);
-                          setCurrentClass(subject);
-                          setRenameValue(subject);
+                          setCurrentClass(cls);
+                          setRenameValue(cls.name);
                           setOpenMenuKey(null);
                         }}
                         className="flex items-center gap-3 w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
@@ -496,7 +539,7 @@ export default function TeacherDashboard() {
                         <Edit size={16} /> Rename Class
                       </button>
                       <button
-                        onClick={() => handleRemoveClass(subject)}
+                        onClick={() => handleRemoveClass(cls)}
                         className="flex items-center gap-3 w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-gray-100"
                       >
                         <Trash2 size={16} /> Remove Class
@@ -505,10 +548,10 @@ export default function TeacherDashboard() {
                   )}
                 </div>
                 <div className="flex-1">
-                  <h3 className="text-xl font-semibold mb-1">{subject}</h3>
+                  <h3 className="text-xl font-semibold mb-1">{cls.name}</h3>
                   <p className="text-gray-500 text-sm mb-2">Last class: {latestSession.date}</p>
                   <p className="text-gray-600">
-                    {latestSession.present}/{classData.totalStudents} present
+                    {latestSession.present}/{effectiveTotal} present
                   </p>
                   <p
                     className={`mt-3 text-lg font-bold ${
@@ -520,7 +563,7 @@ export default function TeacherDashboard() {
                 </div>
                 <button
                   onClick={() => {
-                    setAttendanceSubject(subject);
+                    setAttendanceClass(cls);
                     setIsAttendanceModalOpen(true);
                   }}
                   className="mt-4 bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 flex items-center justify-center gap-2"
@@ -531,111 +574,126 @@ export default function TeacherDashboard() {
             );
           })}
         </div>
-      </div>
-    );
-  };
+      )}
+    </div>
+  );
 
   const renderStudentsView = () => (
     <div>
       <p className="text-gray-600 mb-6">
         Manage student rosters and manually add attendance entries if needed.
       </p>
-      <div className="space-y-12">
-        {Object.keys(studentsBySubject).map((subject) => (
-          <div key={subject}>
-            <h2 className="text-2xl font-bold mb-4 text-gray-800">{subject}</h2>
-            <div className="bg-white shadow-lg rounded-2xl overflow-hidden">
-              <table className="w-full">
-                <thead className="bg-gray-50">
-                  <tr>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Name
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Roll No
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Attendance
-                    </th>
-                    <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Actions
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="bg-white divide-y divide-gray-200">
-                  {studentsBySubject[subject].map((student) => (
-                    <tr key={student.rollNo}>
-                      <td className="px-6 py-4 whitespace-nowrap font-medium text-gray-900">
-                        {student.name}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-gray-500">
-                        {student.rollNo}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <MiniCircularProgress
-                          percentage={calculatePercentage(student.attended, student.total)}
-                        />
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-center">
-                        <button
-                          onClick={() => {
-                            setCurrentStudent(student);
-                            setCurrentSubject(subject);
-                            setIsManualEntryModalOpen(true);
-                          }}
-                          className="p-2 rounded-full bg-green-100 text-green-700 hover:bg-green-200"
-                          title="Add Manual Entry"
-                        >
-                          <CalendarPlus size={16} />
-                        </button>
-                        <button
-                          onClick={() => handleRemoveStudent(subject, student.rollNo)}
-                          className="ml-2 p-2 rounded-full bg-red-100 text-red-700 hover:bg-red-200"
-                          title="Remove Student"
-                        >
-                          <Trash2 size={16} />
-                        </button>
-                      </td>
+      {classes.length === 0 ? (
+        <div className="bg-white shadow-lg rounded-2xl p-10 text-center text-gray-500">
+          Create a class first to manage students.
+        </div>
+      ) : (
+        <div className="space-y-12">
+          {classes.map((cls) => (
+            <div key={cls._id}>
+              <h2 className="text-2xl font-bold mb-4 text-gray-800">{cls.name}</h2>
+              <div className="bg-white shadow-lg rounded-2xl overflow-hidden">
+                <table className="w-full">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Name
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Roll No
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Attendance
+                      </th>
+                      <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Actions
+                      </th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-              <div className="p-4 flex justify-between">
-                <button
-                  onClick={() => downloadCSV(subject)}
-                  className="flex items-center gap-2 bg-gray-600 text-white px-4 py-2 rounded-lg hover:bg-gray-700 transition-colors"
-                >
-                  <ClipboardList size={18} /> Download Data
-                </button>
-                <button
-                  onClick={() => {
-                    setIsAddStudentModalOpen(true);
-                    setCurrentClass(subject);
-                  }}
-                  className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
-                >
-                  <UserPlus size={18} /> Add Student
-                </button>
+                  </thead>
+                  <tbody className="bg-white divide-y divide-gray-200">
+                    {cls.students.map((student) => (
+                      <tr key={student._id}>
+                        <td className="px-6 py-4 whitespace-nowrap font-medium text-gray-900">
+                          {student.name}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-gray-500">
+                          {student.rollNo}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <MiniCircularProgress
+                            percentage={calculatePercentage(student.attended, student.total)}
+                          />
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-center">
+                          <button
+                            onClick={() => {
+                              setCurrentStudent(student);
+                              setCurrentClass(cls);
+                              setIsManualEntryModalOpen(true);
+                            }}
+                            className="p-2 rounded-full bg-green-100 text-green-700 hover:bg-green-200"
+                            title="Add Manual Entry"
+                          >
+                            <CalendarPlus size={16} />
+                          </button>
+                          <button
+                            onClick={() => handleRemoveStudent(cls, student)}
+                            className="ml-2 p-2 rounded-full bg-red-100 text-red-700 hover:bg-red-200"
+                            title="Remove Student"
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                    {cls.students.length === 0 && (
+                      <tr>
+                        <td colSpan={4} className="px-6 py-8 text-center text-gray-500">
+                          No students in this class yet.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+                <div className="p-4 flex justify-between">
+                  <button
+                    onClick={() => downloadCSV(cls)}
+                    className="flex items-center gap-2 bg-gray-600 text-white px-4 py-2 rounded-lg hover:bg-gray-700 transition-colors"
+                  >
+                    <ClipboardList size={18} /> Download Data
+                  </button>
+                  <button
+                    onClick={() => {
+                      setIsAddStudentModalOpen(true);
+                      setCurrentClass(cls);
+                    }}
+                    className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
+                  >
+                    <UserPlus size={18} /> Add Student
+                  </button>
+                </div>
               </div>
             </div>
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 
   const renderCalendarView = () => {
     const formatDate = (date: Date) => date.toISOString().split('T')[0];
+
     const getTileContent = ({ date, view }: { date: Date; view: string }) => {
       if (view === 'month' && sessionDates.has(formatDate(date))) {
         return <div className="h-2 w-2 mx-auto mt-1 bg-blue-500 rounded-full"></div>;
       }
       return null;
     };
-    const sessionsOnSelectedDate = Object.entries(classes)
-      .map(([subject, data]) => {
-        const session = data.sessionHistory.find((s) => s.date === formatDate(selectedCalendarDate));
-        return session ? { subject, ...session, totalStudents: data.totalStudents } : null;
+    const sessionsOnSelectedDate = classes
+      .map((cls) => {
+        const session = cls.sessionHistory.find((s) => s.date === formatDate(selectedCalendarDate));
+        const effectiveTotal = cls.students.length || cls.totalStudents;
+        return session ? { name: cls.name, ...session, totalStudents: effectiveTotal } : null;
       })
       .filter(Boolean);
 
@@ -664,10 +722,10 @@ export default function TeacherDashboard() {
                   if (!sessionData) return null;
                   return (
                     <li
-                      key={sessionData.subject}
+                      key={sessionData.name}
                       className="flex justify-between items-center text-sm p-3 bg-gray-50 rounded-lg"
                     >
-                      <span className="font-semibold">{sessionData.subject}</span>
+                      <span className="font-semibold">{sessionData.name}</span>
                       <span className="font-bold">
                         {sessionData.present}/{sessionData.totalStudents} (
                         {calculatePercentage(sessionData.present, sessionData.totalStudents)}%)
@@ -687,9 +745,8 @@ export default function TeacherDashboard() {
   };
 
   const renderLeaveRequestsView = () => {
-    const [filter, setFilter] = useState('Pending');
     const filteredRequests = leaveRequests.filter(
-      (req) => filter === 'All' || req.status === filter
+      (req) => leaveFilter === 'All' || req.status === leaveFilter
     );
 
     return (
@@ -700,9 +757,9 @@ export default function TeacherDashboard() {
             {['Pending', 'Approved', 'All'].map((f) => (
               <button
                 key={f}
-                onClick={() => setFilter(f)}
+                onClick={() => setLeaveFilter(f)}
                 className={`px-4 py-1 rounded-md text-sm font-semibold ${
-                  filter === f
+                  leaveFilter === f
                     ? 'bg-white shadow'
                     : 'text-gray-600 hover:bg-gray-300'
                 }`}
@@ -716,7 +773,7 @@ export default function TeacherDashboard() {
           {filteredRequests.length > 0 ? (
             filteredRequests.map((req) => (
               <div
-                key={req.id}
+                key={req._id}
                 className="bg-white shadow-lg rounded-2xl p-6 border-l-4 border-yellow-500"
               >
                 <div className="flex justify-between items-start">
@@ -750,14 +807,14 @@ export default function TeacherDashboard() {
                 {req.status === 'Pending' && (
                   <div className="flex justify-end gap-3 mt-4">
                     <button
-                      onClick={() => handleLeaveRequestAction(req.id, 'Rejected')}
+                      onClick={() => handleLeaveRequestAction(req._id, 'Rejected')}
                       className="flex items-center gap-2 px-3 py-1 rounded-lg bg-red-500 text-white hover:bg-red-600 text-sm"
                     >
                       <XCircle size={14} />
                       Reject
                     </button>
                     <button
-                      onClick={() => handleLeaveRequestAction(req.id, 'Approved')}
+                      onClick={() => handleLeaveRequestAction(req._id, 'Approved')}
                       className="flex items-center gap-2 px-3 py-1 rounded-lg bg-green-500 text-white hover:bg-green-600 text-sm"
                     >
                       <Check size={14} />
@@ -769,7 +826,7 @@ export default function TeacherDashboard() {
             ))
           ) : (
             <p className="text-center text-gray-500 py-8">
-              No {filter.toLowerCase()} requests found.
+              No {leaveFilter.toLowerCase()} requests found.
             </p>
           )}
         </div>
@@ -777,20 +834,13 @@ export default function TeacherDashboard() {
     );
   };
 
-  const ActiveViewComponent = () => {
-    switch (activeView) {
-      case 'overview':
-        return renderOverview();
-      case 'students':
-        return renderStudentsView();
-      case 'calendar':
-        return renderCalendarView();
-      case 'leave':
-        return renderLeaveRequestsView();
-      default:
-        return renderOverview();
-    }
-  };
+  if (loading || !isReady) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-100">
+        <p className="text-xl text-gray-600">Loading your dashboard...</p>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen flex bg-gray-100">
@@ -820,7 +870,8 @@ export default function TeacherDashboard() {
               </button>
               <button
                 onClick={handleAddClass}
-                className="px-4 py-2 rounded-lg bg-green-600 text-white hover:bg-green-700"
+                disabled={submitting}
+                className="px-4 py-2 rounded-lg bg-green-600 text-white hover:bg-green-700 disabled:opacity-50"
               >
                 Add Class
               </button>
@@ -861,7 +912,7 @@ export default function TeacherDashboard() {
         <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50">
           <form onSubmit={handleAddStudentSubmit} className="bg-white rounded-xl shadow-lg p-6 w-96">
             <div className="flex justify-between items-center mb-4">
-              <h2 className="text-xl font-semibold">Add Student to {currentClass}</h2>
+              <h2 className="text-xl font-semibold">Add Student to {currentClass?.name}</h2>
               <button type="button" onClick={() => setIsAddStudentModalOpen(false)}>
                 <X size={20} className="text-gray-600 hover:text-black" />
               </button>
@@ -884,11 +935,10 @@ export default function TeacherDashboard() {
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-green-500"
               />
               <input
-                required
                 type="email"
                 value={newStudent.email}
                 onChange={(e) => setNewStudent({ ...newStudent, email: e.target.value })}
-                placeholder="Email"
+                placeholder="Email (links an existing student account)"
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-green-500"
               />
             </div>
@@ -902,7 +952,8 @@ export default function TeacherDashboard() {
               </button>
               <button
                 type="submit"
-                className="px-4 py-2 rounded-lg bg-green-600 text-white hover:bg-green-700"
+                disabled={submitting}
+                className="px-4 py-2 rounded-lg bg-green-600 text-white hover:bg-green-700 disabled:opacity-50"
               >
                 Add Student
               </button>
@@ -938,7 +989,8 @@ export default function TeacherDashboard() {
               </button>
               <button
                 type="submit"
-                className="px-4 py-2 rounded-lg bg-green-600 text-white hover:bg-green-700"
+                disabled={submitting}
+                className="px-4 py-2 rounded-lg bg-green-600 text-white hover:bg-green-700 disabled:opacity-50"
               >
                 Rename
               </button>
@@ -968,7 +1020,7 @@ export default function TeacherDashboard() {
             <div className="space-y-6">
               <p>
                 For <strong className="text-green-700">{currentStudent?.name}</strong> in{' '}
-                <strong className="text-green-700">{currentSubject}</strong>
+                <strong className="text-green-700">{currentClass?.name}</strong>
               </p>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -1007,7 +1059,7 @@ export default function TeacherDashboard() {
                       onChange={(e) =>
                         setManualEntryData({ ...manualEntryData, status: e.target.value })
                       }
-                      className="form-radio h-4 w-4 text-red-600"
+                      className="form-radio h-4 w-4 text-green-600"
                     />
                     <span className="ml-2">Absent</span>
                   </label>
@@ -1038,8 +1090,8 @@ export default function TeacherDashboard() {
               </button>
               <button
                 type="submit"
-                disabled={!manualEntryData.reason}
-                className="px-5 py-2 rounded-lg bg-green-600 text-white font-semibold hover:bg-green-700 transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed disabled:bg-green-600"
+                disabled={!manualEntryData.reason || submitting}
+                className="px-5 py-2 rounded-lg bg-green-600 text-white font-semibold hover:bg-green-700 transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Submit Entry
               </button>
@@ -1089,7 +1141,8 @@ export default function TeacherDashboard() {
       )}
 
       <aside className="w-64 bg-green-700 text-white flex flex-col p-6">
-        <h2 className="text-2xl font-bold mb-8">Teacher Dashboard</h2>
+        <h2 className="text-2xl font-bold mb-2">Teacher Dashboard</h2>
+        {user && <p className="text-green-200 text-sm mb-6">{user.name}</p>}
         <nav className="flex-1 space-y-4">
           <button
             onClick={() => setActiveView('overview')}
@@ -1137,8 +1190,18 @@ export default function TeacherDashboard() {
         </button>
       </aside>
       <main className="flex-1 p-8">
-        <h1 className="text-3xl font-bold mb-6">Welcome, Teacher</h1>
-        <ActiveViewComponent />
+        <h1 className="text-3xl font-bold mb-6">
+          Welcome{user ? `, ${user.name}` : ', Teacher'}
+        </h1>
+        {pageError && (
+          <div className="mb-6 p-4 bg-red-100 border border-red-300 text-red-700 rounded-lg text-sm">
+            {pageError}
+          </div>
+        )}
+        {activeView === 'overview' && renderOverview()}
+        {activeView === 'students' && renderStudentsView()}
+        {activeView === 'calendar' && renderCalendarView()}
+        {activeView === 'leave' && renderLeaveRequestsView()}
       </main>
     </div>
   );

@@ -47,6 +47,12 @@ export async function POST(request: NextRequest) {
 
     const sessionDuration = duration || 10 * 60 * 1000; // Default 10 minutes
 
+    // Guard against multiple concurrent active sessions for one class
+    await Session.updateMany(
+      { classId, isActive: true },
+      { $set: { isActive: false } }
+    );
+
     const newSession = await Session.create({
       classId,
       teacherId,

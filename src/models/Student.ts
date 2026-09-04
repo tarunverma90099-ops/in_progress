@@ -1,11 +1,11 @@
 import mongoose, { Schema, Document } from 'mongoose';
 
 export interface IStudent extends Document {
-  userId: mongoose.Types.ObjectId;
+  userId?: mongoose.Types.ObjectId | null;
   classId: mongoose.Types.ObjectId;
   name: string;
   rollNo: number;
-  email: string;
+  email?: string;
   attended: number;
   total: number;
   createdAt: Date;
@@ -17,7 +17,7 @@ const StudentSchema = new Schema<IStudent>(
     userId: {
       type: Schema.Types.ObjectId,
       ref: 'User',
-      required: true,
+      default: null,
     },
     classId: {
       type: Schema.Types.ObjectId,
@@ -49,5 +49,8 @@ const StudentSchema = new Schema<IStudent>(
     timestamps: true,
   }
 );
+
+// A roll number must be unique within a class
+StudentSchema.index({ classId: 1, rollNo: 1 }, { unique: true });
 
 export default mongoose.models.Student || mongoose.model<IStudent>('Student', StudentSchema);

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { facultyAPI } from '@/lib/api';
@@ -25,11 +25,7 @@ export default function CollegeDashboard() {
   const [filterBy, setFilterBy] = useState('name');
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    fetchFaculty();
-  }, []);
-
-  const fetchFaculty = async () => {
+  const fetchFaculty = useCallback(async () => {
     try {
       const result = await facultyAPI.getAll();
       if (result.success) {
@@ -40,7 +36,11 @@ export default function CollegeDashboard() {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    void Promise.resolve().then(() => fetchFaculty());
+  }, [fetchFaculty]);
 
   // Stats
   const totalFaculty = faculty.length;
@@ -162,6 +162,7 @@ export default function CollegeDashboard() {
             key={prof._id}
             className="bg-white shadow-lg rounded-2xl p-6 flex flex-col items-center"
           >
+            {/* eslint-disable-next-line @next/next/no-img-element -- faculty photo URLs are arbitrary user-supplied hosts */}
             <img
               src={prof.photo}
               alt={prof.name}
