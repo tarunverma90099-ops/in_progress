@@ -1,103 +1,71 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest } from 'next/server';
 import bcrypt from 'bcryptjs';
-import connectDB from '@/lib/mongodb';
 import { Faculty, User } from '@/models';
+import { badRequest, conflict, ok, readJson, route } from '@/lib/http';
 
-// GET all faculty members
-export async function GET(request: NextRequest) {
-  try {
-    await connectDB();
-    
-    const { searchParams } = new URL(request.url);
-    const search = searchParams.get('search');
-    const filterBy = searchParams.get('filterBy') || 'name';
+const DEFAULT_PHOTO = '/faculty-placeholder.svg';
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-    let query: Record<string, unknown> = {};
-    
-    if (search) {
-      if (filterBy === 'name') {
-        query.name = { $regex: search, $options: 'i' };
-      } else if (filterBy === 'department') {
-        query.department = { $regex: search, $options: 'i' };
-      }
-    }
+/** Escape user input before using it inside a regular expression. */
+const escapeRegex = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-    const faculty = await Faculty.find(query).sort({ createdAt: -1 });
+/** GET /api/faculty?search=&filterBy=name|department */
+export const GET = route('Get faculty', async (request: NextRequest) => {
+  const params = request.nextUrl.searchParams;
+  const search = params.get('search')?.trim();
+  const filterBy = params.get('filterBy') === 'department' ? 'department' : 'name';
 
-    return NextResponse.json({
-      success: true,
-      faculty,
-    });
-  } catch (error) {
-    console.error('Get faculty error:', error);
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    );
+  const query = search ? { [filterBy]: { $regex: escapeRegex(search), $options: 'i' } } : {};
+  const faculty = await Faculty.find(query).sort({ createdAt: -1 }).lean();
+
+  return ok({ faculty });
+});
+
+/** POST /api/faculty — create a faculty profile and its teacher login. */
+export const POST = route('Add faculty', async (request: NextRequest) => {
+  const body = await readJson<{
+    name?: string;
+    email?: string;
+    department?: string;
+    status?: string;
+    photo?: string;
+  }>(request);
+
+  const name = String(body.name ?? '').trim();
+  const email = String(body.email ?? '').trim().toLowerCase();
+  const department = String(body.department ?? '').trim();
+
+  if (!name || !email || !department) {
+    throw badRequest('Name, email, and department are required');
   }
-}
+  if (!EMAIL_RE.test(email)) throw badRequest('Enter a valid email address');
 
-// POST - Add new faculty
-export async function POST(request: NextRequest) {
-  try {
-    await connectDB();
-    
-    const body = await request.json();
-    const { name, email, department, status, photo } = body;
+  if (await Faculty.exists({ email })) {
+    throw conflict('Faculty with this email already exists');
+  }
 
-    if (!name || !email || !department) {
-      return NextResponse.json(
-        { error: 'Name, email, and department are required' },
-        { status: 400 }
-      );
-    }
-
-    // Check for duplicate email at the faculty level
-    const existingFaculty = await Faculty.findOne({ email: email.toLowerCase() });
-    if (existingFaculty) {
-      return NextResponse.json(
-        { error: 'Faculty with this email already exists' },
-        { status: 409 }
-      );
-    }
-
-    // Create (or reuse) a user account for the faculty
-    const defaultPassword = 'faculty123'; // Default password
-    const salt = await bcrypt.genSalt(10);
-    const hashedPassword = await bcrypt.hash(defaultPassword, salt);
-
-    let user = await User.findOne({ email: email.toLowerCase() });
-    if (!user) {
-      user = await User.create({
-        email: email.toLowerCase(),
-        password: hashedPassword,
-        name,
-        role: 'teacher',
-        department,
-      });
-    }
-
-    // Create faculty profile
-    const newFaculty = await Faculty.create({
-      userId: user._id,
+  let user = await User.findOne({ email });
+  if (!user) {
+    // Temporary password; the teacher is expected to change it after first login.
+    const tempPassword = process.env.DEFAULT_FACULTY_PASSWORD ?? 'faculty123';
+    user = await User.create({
+      email,
+      password: await bcrypt.hash(tempPassword, 10),
       name,
-      email: email.toLowerCase(),
+      role: 'teacher',
       department,
-      status: status || 'active',
-      photo: photo || 'https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcR0mpEAFXv-iIa50q5rA2L6nnHGy_akXDFyQQ&s',
-      subjects: [],
-      attendance: '100%',
     });
-
-    return NextResponse.json({
-      success: true,
-      faculty: newFaculty,
-    });
-  } catch (error) {
-    console.error('Add faculty error:', error);
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    );
   }
-}
+
+  const faculty = await Faculty.create({
+    userId: user._id,
+    name,
+    email,
+    department,
+    status: body.status === 'leave' ? 'leave' : 'active',
+    photo: body.photo?.trim() || DEFAULT_PHOTO,
+    subjects: [],
+  });
+
+  return ok({ faculty }, 201);
+});

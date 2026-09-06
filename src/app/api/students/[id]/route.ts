@@ -1,76 +1,41 @@
-import { NextRequest, NextResponse } from 'next/server';
-import connectDB from '@/lib/mongodb';
-import { Student, Class } from '@/models';
+import { NextRequest } from 'next/server';
+import { AttendanceRecord, Student } from '@/models';
+import { notFound, objectId, ok, readJson, route } from '@/lib/http';
+import { syncEnrolledCount } from '@/lib/attendance';
 
-// PUT - Update student
-export async function PUT(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  try {
-    await connectDB();
-    
-    const { id } = await params;
-    const body = await request.json();
+type Ctx = { params: Promise<{ id: string }> };
 
-    const updatedStudent = await Student.findByIdAndUpdate(
-      id,
-      { $set: body },
-      { returnDocument: 'after', runValidators: true }
-    );
+// Fields a client may change; counters and links are server-owned.
+const EDITABLE = ['name', 'email', 'rollNo'] as const;
 
-    if (!updatedStudent) {
-      return NextResponse.json(
-        { error: 'Student not found' },
-        { status: 404 }
-      );
-    }
+/** PUT /api/students/:id — update an enrollment's editable fields. */
+export const PUT = route('Update student', async (request: NextRequest, ctx: Ctx) => {
+  const { id } = await ctx.params;
+  const body = await readJson<Record<string, unknown>>(request);
 
-    return NextResponse.json({
-      success: true,
-      student: updatedStudent,
-    });
-  } catch (error) {
-    console.error('Update student error:', error);
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    );
+  const updates: Record<string, unknown> = {};
+  for (const field of EDITABLE) {
+    if (body[field] !== undefined) updates[field] = body[field];
   }
-}
 
-// DELETE - Remove student
-export async function DELETE(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  try {
-    await connectDB();
-    
-    const { id } = await params;
-    const deletedStudent = await Student.findByIdAndDelete(id);
+  const student = await Student.findByIdAndUpdate(
+    objectId(id, 'student ID'),
+    { $set: updates },
+    { new: true, runValidators: true }
+  );
 
-    if (!deletedStudent) {
-      return NextResponse.json(
-        { error: 'Student not found' },
-        { status: 404 }
-      );
-    }
+  if (!student) throw notFound('Student not found');
+  return ok({ student });
+});
 
-    // Update total students count in class
-    await Class.findByIdAndUpdate(deletedStudent.classId, {
-      $inc: { totalStudents: -1 }
-    });
+/** DELETE /api/students/:id — remove an enrollment and its attendance records. */
+export const DELETE = route('Delete student', async (_request: NextRequest, ctx: Ctx) => {
+  const { id } = await ctx.params;
+  const student = await Student.findByIdAndDelete(objectId(id, 'student ID'));
+  if (!student) throw notFound('Student not found');
 
-    return NextResponse.json({
-      success: true,
-      message: 'Student deleted successfully',
-    });
-  } catch (error) {
-    console.error('Delete student error:', error);
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    );
-  }
-}
+  await AttendanceRecord.deleteMany({ studentId: student._id });
+  await syncEnrolledCount(String(student.classId));
+
+  return ok({ message: 'Student removed from class' });
+});

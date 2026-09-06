@@ -1,75 +1,52 @@
-import { NextRequest, NextResponse } from 'next/server';
-import connectDB from '@/lib/mongodb';
-import { Session } from '@/models';
+import { NextRequest } from 'next/server';
+import { Class, Session } from '@/models';
+import { badRequest, forbidden, notFound, objectId, ok, readJson, route } from '@/lib/http';
 
-// GET all active sessions
-export async function GET(request: NextRequest) {
-  try {
-    await connectDB();
-    
-    const { searchParams } = new URL(request.url);
-    const classId = searchParams.get('classId');
-    const teacherId = searchParams.get('teacherId');
+const DEFAULT_DURATION_MS = 10 * 60 * 1000;
+const MAX_DURATION_MS = 6 * 60 * 60 * 1000;
 
-    let query: Record<string, unknown> = {};
-    if (classId) query.classId = classId;
-    if (teacherId) query.teacherId = teacherId;
+/** GET /api/sessions?classId=&teacherId= */
+export const GET = route('Get sessions', async (request: NextRequest) => {
+  const params = request.nextUrl.searchParams;
+  const query: Record<string, unknown> = {};
 
-    const sessions = await Session.find(query).sort({ createdAt: -1 });
+  const classId = params.get('classId');
+  const teacherId = params.get('teacherId');
+  if (classId) query.classId = objectId(classId, 'class ID');
+  if (teacherId) query.teacherId = objectId(teacherId, 'teacher ID');
 
-    return NextResponse.json({
-      success: true,
-      sessions,
-    });
-  } catch (error) {
-    console.error('Get sessions error:', error);
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    );
+  const sessions = await Session.find(query).sort({ createdAt: -1 }).limit(100).lean();
+  return ok({ sessions });
+});
+
+/** POST /api/sessions — open a live attendance session for a class. */
+export const POST = route('Create session', async (request: NextRequest) => {
+  const body = await readJson<{ classId?: string; teacherId?: string; duration?: number }>(request);
+
+  const classId = objectId(body.classId, 'class ID');
+  const teacherId = objectId(body.teacherId, 'teacher ID');
+
+  const duration = body.duration === undefined ? DEFAULT_DURATION_MS : Number(body.duration);
+  if (!Number.isFinite(duration) || duration <= 0 || duration > MAX_DURATION_MS) {
+    throw badRequest('Duration must be between 1ms and 6 hours');
   }
-}
 
-// POST - Create new session
-export async function POST(request: NextRequest) {
-  try {
-    await connectDB();
-    
-    const body = await request.json();
-    const { classId, teacherId, duration } = body;
-
-    if (!classId || !teacherId) {
-      return NextResponse.json(
-        { error: 'Class ID and teacher ID are required' },
-        { status: 400 }
-      );
-    }
-
-    const sessionDuration = duration || 10 * 60 * 1000; // Default 10 minutes
-
-    // Guard against multiple concurrent active sessions for one class
-    await Session.updateMany(
-      { classId, isActive: true },
-      { $set: { isActive: false } }
-    );
-
-    const newSession = await Session.create({
-      classId,
-      teacherId,
-      sessionExpiresAt: new Date(Date.now() + sessionDuration),
-      isActive: true,
-      scannedStudents: [],
-    });
-
-    return NextResponse.json({
-      success: true,
-      session: newSession,
-    });
-  } catch (error) {
-    console.error('Create session error:', error);
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    );
+  const cls = await Class.findById(classId).select('teacherId');
+  if (!cls) throw notFound('Class not found');
+  if (String(cls.teacherId) !== teacherId) {
+    throw forbidden('Only the teacher who owns this class can start a session');
   }
-}
+
+  // Never leave two live sessions competing for the same class.
+  await Session.updateMany({ classId, isActive: true }, { $set: { isActive: false } });
+
+  const session = await Session.create({
+    classId,
+    teacherId,
+    sessionExpiresAt: new Date(Date.now() + duration),
+    isActive: true,
+    scannedStudents: [],
+  });
+
+  return ok({ session }, 201);
+});

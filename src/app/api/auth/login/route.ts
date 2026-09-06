@@ -1,83 +1,60 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest } from 'next/server';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import connectDB from '@/lib/mongodb';
 import { User } from '@/models';
+import { HttpError, badRequest, ok, readJson, route } from '@/lib/http';
 
-export async function POST(request: NextRequest) {
-  try {
-    await connectDB();
-    
-    const body = await request.json();
-    const { email, password, role } = body;
-
-    if (!email || !password || !role) {
-      return NextResponse.json(
-        { error: 'Email, password, and role are required' },
-        { status: 400 }
-      );
-    }
-
-    // Find user by email
-    const user = await User.findOne({ email: email.toLowerCase() });
-    
-    if (!user) {
-      return NextResponse.json(
-        { error: 'Invalid email or password' },
-        { status: 401 }
-      );
-    }
-
-    // Check password
-    const isPasswordValid = await bcrypt.compare(password, user.password);
-    
-    if (!isPasswordValid) {
-      return NextResponse.json(
-        { error: 'Invalid email or password' },
-        { status: 401 }
-      );
-    }
-
-    // Check role
-    if (user.role !== role) {
-      return NextResponse.json(
-        { error: `This account is not registered as a ${role}` },
-        { status: 403 }
-      );
-    }
-
-    // Generate JWT token
-    const jwtSecret = process.env.JWT_SECRET;
-    if (!jwtSecret) {
-      throw new Error('JWT_SECRET is not configured. Add it to .env.local.');
-    }
-
-    const token = jwt.sign(
-      { userId: user._id, email: user.email, role: user.role, name: user.name },
-      jwtSecret,
-      { expiresIn: '7d' }
-    );
-
-    return NextResponse.json({
-      success: true,
-      token,
-      user: {
-        id: user._id,
-        email: user.email,
-        name: user.name,
-        role: user.role,
-        profileImage: user.profileImage,
-      },
-    });
-  } catch (error) {
-    console.error('Login error:', error);
-    const message = error instanceof Error ? error.message : 'Unknown error';
-    if (message.includes('not configured')) {
-      return NextResponse.json({ error: message }, { status: 503 });
-    }
-    return NextResponse.json(
-      { error: 'Database unavailable. Check MONGODB_URI and that MongoDB is running.' },
-      { status: 503 }
-    );
-  }
+interface LoginBody {
+  email?: string;
+  password?: string;
+  role?: string;
 }
+
+export const POST = route('Login', async (request: NextRequest) => {
+  const body = await readJson<LoginBody>(request);
+  const email = String(body.email ?? '').trim().toLowerCase();
+  const password = String(body.password ?? '');
+  const role = String(body.role ?? '').trim();
+
+  if (!email || !password || !role) {
+    throw badRequest('Email, password, and role are required');
+  }
+
+  const jwtSecret = process.env.JWT_SECRET;
+  if (!jwtSecret) {
+    throw new HttpError(503, 'JWT_SECRET is not configured. Add it to .env.local.');
+  }
+
+  const user = await User.findOne({ email });
+
+  // Always compare against a hash so timing does not leak account existence.
+  const passwordMatches = user
+    ? await bcrypt.compare(password, user.password)
+    : await bcrypt.compare(password, '$2a$10$invalidinvalidinvalidinvalidinvalidinvalidinvalidinvalidi');
+
+  if (!user || !passwordMatches) {
+    throw new HttpError(401, 'Invalid email or password');
+  }
+
+  if (user.role !== role) {
+    throw new HttpError(403, `This account is not registered as a ${role}`);
+  }
+
+  const token = jwt.sign(
+    { userId: String(user._id), email: user.email, role: user.role, name: user.name },
+    jwtSecret,
+    { expiresIn: '7d' }
+  );
+
+  return ok({
+    token,
+    user: {
+      id: user._id,
+      email: user.email,
+      name: user.name,
+      role: user.role,
+      rollNo: user.rollNo,
+      profileImage: user.profileImage,
+    },
+  });
+});

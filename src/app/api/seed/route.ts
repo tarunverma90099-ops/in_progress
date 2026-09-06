@@ -97,7 +97,7 @@ export async function POST(request: NextRequest) {
         email: 'sweta.choubey@college.edu',
         department: 'Basic Science and Humanities',
         status: 'active',
-        photo: 'https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcR0mpEAFXv-iIa50q5rA2L6nnHGy_akXDFyQQ&s',
+        photo: '/faculty-placeholder.svg',
         subjects: ['Digital Circuits', 'Embedded System'],
         attendance: '99%',
         lastAttendance: {
@@ -113,7 +113,7 @@ export async function POST(request: NextRequest) {
         email: 'prashant.sahu@college.edu',
         department: 'Environmental Chemistry',
         status: 'leave',
-        photo: 'https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcR0mpEAFXv-iIa50q5rA2L6nnHGy_akXDFyQQ&s',
+        photo: '/faculty-placeholder.svg',
         subjects: ['Environmental Chemistry'],
         attendance: '78%',
         lastAttendance: {
@@ -129,7 +129,7 @@ export async function POST(request: NextRequest) {
         email: 'shashi.kindo@college.edu',
         department: 'Environmental Chemistry',
         status: 'active',
-        photo: 'https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcR0mpEAFXv-iIa50q5rA2L6nnHGy_akXDFyQQ&s',
+        photo: '/faculty-placeholder.svg',
         subjects: ['Linear Algebra', 'Probability & Statistics'],
         attendance: '88%',
         lastAttendance: {
@@ -156,6 +156,8 @@ export async function POST(request: NextRequest) {
     const class1 = await Class.create({
       name: 'Digital Circuits',
       teacherId: teacher1._id,
+      capacity: 60,
+      enrollmentOpen: true,
       totalStudents: 0,
       sessionHistory: [],
     });
@@ -163,6 +165,8 @@ export async function POST(request: NextRequest) {
     const class2 = await Class.create({
       name: 'Embedded System',
       teacherId: teacher1._id,
+      capacity: 60,
+      enrollmentOpen: true,
       totalStudents: 0,
       sessionHistory: [],
     });

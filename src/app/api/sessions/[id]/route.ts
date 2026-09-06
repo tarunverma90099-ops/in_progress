@@ -1,296 +1,152 @@
-import { NextRequest, NextResponse } from 'next/server';
-import connectDB from '@/lib/mongodb';
+import { NextRequest } from 'next/server';
 import mongoose from 'mongoose';
-import { Session, Class, Student, AttendanceRecord, StudentAttendance } from '@/models';
+import { AttendanceRecord, Session, Student } from '@/models';
+import { HttpError, badRequest, notFound, objectId, ok, readJson, route, todayStr } from '@/lib/http';
+import {
+  recordSessionHistory,
+  requireClass,
+  requireEnrollment,
+  upsertAttendance,
+} from '@/lib/attendance';
 
-function todayStr() {
-  return new Date().toISOString().split('T')[0];
+type Ctx = { params: Promise<{ id: string }> };
+
+async function loadSession(ctx: Ctx) {
+  const { id } = await ctx.params;
+  const session = await Session.findById(objectId(id, 'session ID'));
+  if (!session) throw notFound('Session not found');
+  return session;
 }
 
-// GET single session
-export async function GET(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  try {
-    await connectDB();
-    
-    const { id } = await params;
-    const session = await Session.findById(id);
+/** GET /api/sessions/:id — live session state including who has scanned in. */
+export const GET = route('Get session', async (_request: NextRequest, ctx: Ctx) => {
+  const session = await loadSession(ctx);
 
-    if (!session) {
-      return NextResponse.json(
-        { error: 'Session not found' },
-        { status: 404 }
-      );
-    }
-
-    // Auto-expire if past the end time
-    if (session.isActive && session.sessionExpiresAt < new Date()) {
-      session.isActive = false;
-      await session.save();
-    }
-
-    // Resolve scanned student details for live display
-    const scanned = await Student.find({ userId: { $in: session.scannedStudents } })
-      .select('name rollNo userId');
-
-    return NextResponse.json({
-      success: true,
-      session: {
-        ...session.toObject(),
-        scannedStudentDetails: scanned,
-      },
-    });
-  } catch (error) {
-    console.error('Get session error:', error);
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    );
+  if (session.isActive && session.sessionExpiresAt < new Date()) {
+    session.isActive = false;
+    await session.save();
   }
+
+  const scannedStudentDetails = await Student.find({
+    classId: session.classId,
+    userId: { $in: session.scannedStudents },
+  })
+    .select('name rollNo userId')
+    .lean();
+
+  return ok({ session: { ...session.toObject(), scannedStudentDetails } });
+});
+
+/**
+ * PUT /api/sessions/:id
+ *  { studentId }      -> QR check-in (only for students enrolled in the class)
+ *  { action: 'end' }  -> finalize: scanned students Present, the rest Absent
+ */
+export const PUT = route('Update session', async (request: NextRequest, ctx: Ctx) => {
+  const body = await readJson<{ studentId?: string; action?: string }>(request);
+  const session = await loadSession(ctx);
+  const classId = String(session.classId);
+
+  if (body.action === 'end') {
+    return endSession(session, classId);
+  }
+
+  if (!body.studentId) {
+    throw badRequest('Provide a studentId to check in, or action "end" to finish the session');
+  }
+
+  return checkIn(session, classId, objectId(body.studentId, 'student ID'));
+});
+
+/** DELETE /api/sessions/:id — discard a session without finalizing attendance. */
+export const DELETE = route('Delete session', async (_request: NextRequest, ctx: Ctx) => {
+  const { id } = await ctx.params;
+  const deleted = await Session.findByIdAndDelete(objectId(id, 'session ID'));
+  if (!deleted) throw notFound('Session not found');
+  return ok({ message: 'Session discarded' });
+});
+
+async function checkIn(
+  session: mongoose.Document & {
+    classId: mongoose.Types.ObjectId;
+    isActive: boolean;
+    sessionExpiresAt: Date;
+    scannedStudents: mongoose.Types.ObjectId[];
+  },
+  classId: string,
+  studentUserId: string
+) {
+  if (!session.isActive) {
+    throw new HttpError(410, 'This session has ended');
+  }
+  if (session.sessionExpiresAt < new Date()) {
+    session.isActive = false;
+    await session.save();
+    throw new HttpError(410, 'This session has expired');
+  }
+
+  // Enrollment gate: only students registered for this course may check in.
+  const enrollment = await requireEnrollment(studentUserId, classId);
+  const cls = await requireClass(classId);
+
+  const alreadyScanned = session.scannedStudents.some((s) => String(s) === studentUserId);
+  if (alreadyScanned) {
+    return ok({ message: 'Attendance already marked', alreadyMarked: true });
+  }
+
+  session.scannedStudents.push(new mongoose.Types.ObjectId(studentUserId));
+  await session.save();
+
+  await upsertAttendance({
+    enrollmentId: String(enrollment._id),
+    classId,
+    subject: cls.name,
+    date: todayStr(),
+    status: 'Present',
+  });
+
+  return ok({
+    message: 'Attendance marked successfully',
+    course: cls.name,
+    student: { _id: enrollment._id, name: enrollment.name, rollNo: enrollment.rollNo },
+  });
 }
 
-// PUT - Update session
-// Body { studentId } -> mark this student present (QR check-in)
-// Body { action: 'end' } -> finalize: scanned students Present, everyone else Absent
-// Any other body -> generic update
-export async function PUT(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
+async function endSession(
+  session: mongoose.Document & { classId: mongoose.Types.ObjectId; isActive: boolean; scannedStudents: mongoose.Types.ObjectId[] },
+  classId: string
 ) {
-  try {
-    await connectDB();
-    
-    const { id } = await params;
-    const body = await request.json();
+  const cls = await requireClass(classId);
+  const roster = await Student.find({ classId });
+  const date = todayStr();
+  const scanned = new Set(session.scannedStudents.map(String));
 
-    const session = await Session.findById(id);
-    if (!session) {
-      return NextResponse.json(
-        { error: 'Session not found' },
-        { status: 404 }
-      );
-    }
+  let presentCount = 0;
+  for (const student of roster) {
+    const isPresent = student.userId ? scanned.has(String(student.userId)) : false;
+    if (isPresent) presentCount += 1;
 
-    // ---- QR check-in ----
-    if (body.studentId && body.action !== 'end') {
-      if (!session.isActive) {
-        return NextResponse.json(
-          { error: 'This session has ended' },
-          { status: 410 }
-        );
-      }
-      if (session.sessionExpiresAt < new Date()) {
-        session.isActive = false;
-        await session.save();
-        return NextResponse.json(
-          { error: 'This session has expired' },
-          { status: 410 }
-        );
-      }
+    // Never overwrite an approved Leave that was already recorded for today.
+    const existing = await AttendanceRecord.findOne({ studentId: student._id, classId, date });
+    if (existing?.status === 'Leave') continue;
 
-      const studentUserId = body.studentId;
-
-      // The scanning user must be enrolled in the session's class
-      const student = await Student.findOne({
-        userId: studentUserId,
-        classId: session.classId,
-      });
-
-      if (!student) {
-        return NextResponse.json(
-          { error: 'You are not enrolled in this class' },
-          { status: 403 }
-        );
-      }
-
-      if (session.scannedStudents.some((s: mongoose.Types.ObjectId) => s.toString() === String(studentUserId))) {
-        return NextResponse.json(
-          { success: true, message: 'Attendance already marked', alreadyMarked: true, session },
-        );
-      }
-
-      session.scannedStudents.push(studentUserId);
-      await session.save();
-
-      // Mark attendance immediately
-      const date = todayStr();
-      const existing = await AttendanceRecord.findOne({
-        studentId: student._id,
-        classId: session.classId,
-        date,
-      });
-
-      if (!existing) {
-        await AttendanceRecord.create({
-          studentId: student._id,
-          classId: session.classId,
-          date,
-          status: 'Present',
-        });
-
-        const cls = await Class.findById(session.classId);
-        await StudentAttendance.findOneAndUpdate(
-          { studentId: student._id, subject: cls?.name || '' },
-          {
-            $inc: { total: 1, attended: 1 },
-            $push: { history: { date, status: 'Present' } },
-          },
-          { returnDocument: 'after', upsert: true }
-        );
-
-        await Student.findByIdAndUpdate(student._id, {
-          $inc: { attended: 1, total: 1 },
-        });
-      }
-
-      return NextResponse.json({
-        success: true,
-        message: 'Attendance marked successfully',
-        session,
-        student: { _id: student._id, name: student.name, rollNo: student.rollNo },
-      });
-    }
-
-    // ---- End session & finalize attendance ----
-    if (body.action === 'end') {
-      const cls = await Class.findById(session.classId);
-      if (!cls) {
-        return NextResponse.json(
-          { error: 'Class not found' },
-          { status: 404 }
-        );
-      }
-
-      const roster = await Student.find({ classId: session.classId });
-      const date = todayStr();
-      const scannedSet = new Set(session.scannedStudents.map((s: mongoose.Types.ObjectId) => s.toString()));
-
-      let presentCount = 0;
-
-      for (const student of roster) {
-        const wasScanned = scannedSet.has(String(student.userId));
-        const existing = await AttendanceRecord.findOne({
-          studentId: student._id,
-          classId: session.classId,
-          date,
-        });
-
-        const status: 'Present' | 'Absent' = wasScanned ? 'Present' : 'Absent';
-        if (wasScanned) presentCount += 1;
-
-        if (!existing) {
-          await AttendanceRecord.create({
-            studentId: student._id,
-            classId: session.classId,
-            date,
-            status,
-          });
-
-          await StudentAttendance.findOneAndUpdate(
-            { studentId: student._id, subject: cls.name },
-            {
-              $inc: { total: 1, ...(status === 'Present' ? { attended: 1 } : {}) },
-              $push: { history: { date, status } },
-            },
-            { returnDocument: 'after', upsert: true }
-          );
-
-          await Student.findByIdAndUpdate(student._id, {
-            $inc: {
-              total: 1,
-              ...(status === 'Present' ? { attended: 1 } : {}),
-            },
-          });
-        } else if (existing.status !== status) {
-          // Adjust aggregates if a prior record (e.g. manual entry) conflicts
-          const delta = status === 'Present' ? 1 : -1;
-          await AttendanceRecord.updateOne({ _id: existing._id }, { status });
-          await StudentAttendance.findOneAndUpdate(
-            { studentId: student._id, subject: cls.name },
-            {
-              $inc: { attended: delta },
-              $set: { 'history.$[elem].status': status },
-            },
-            { returnDocument: 'after', arrayFilters: [{ 'elem.date': date }] }
-          );
-          await Student.findByIdAndUpdate(student._id, { $inc: { attended: delta } });
-        }
-      }
-
-      // Update class session history
-      const existingEntry = cls.sessionHistory?.find((s: { date: string }) => s.date === date);
-      if (existingEntry) {
-        await Class.updateOne(
-          { _id: cls._id, 'sessionHistory.date': date },
-          { $set: { 'sessionHistory.$.present': presentCount } }
-        );
-      } else {
-        await Class.findByIdAndUpdate(cls._id, {
-          $push: { sessionHistory: { date, present: presentCount } },
-        });
-      }
-
-      session.isActive = false;
-      await session.save();
-
-      return NextResponse.json({
-        success: true,
-        message: 'Session ended and attendance finalized',
-        presentCount,
-        totalStudents: roster.length,
-        session,
-      });
-    }
-
-    // ---- Generic update ----
-    const updatedSession = await Session.findByIdAndUpdate(
-      id,
-      { $set: body },
-      { returnDocument: 'after' }
-    );
-
-    return NextResponse.json({
-      success: true,
-      session: updatedSession,
+    await upsertAttendance({
+      enrollmentId: String(student._id),
+      classId,
+      subject: cls.name,
+      date,
+      status: isPresent ? 'Present' : 'Absent',
     });
-  } catch (error) {
-    console.error('Update session error:', error);
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    );
   }
-}
 
-// DELETE - End (remove) session
-export async function DELETE(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  try {
-    await connectDB();
-    
-    const { id } = await params;
-    const deletedSession = await Session.findByIdAndDelete(id);
+  await recordSessionHistory(classId, date, presentCount);
 
-    if (!deletedSession) {
-      return NextResponse.json(
-        { error: 'Session not found' },
-        { status: 404 }
-      );
-    }
+  session.isActive = false;
+  await session.save();
 
-    return NextResponse.json({
-      success: true,
-      message: 'Session ended successfully',
-    });
-  } catch (error) {
-    console.error('Delete session error:', error);
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    );
-  }
+  return ok({
+    message: 'Session ended and attendance finalized',
+    presentCount,
+    totalStudents: roster.length,
+  });
 }

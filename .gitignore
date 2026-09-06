@@ -9,15 +9,7 @@ next-env.d.ts
 
 # Environment variables
 .env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
-mongodb/.env
-
-# Local MongoDB data (mongodb/run.sh, dump files, dbpath)
-mongodb/data
-mongodb/*.log
+.env*.local
 
 # Misc
 .DS_Store

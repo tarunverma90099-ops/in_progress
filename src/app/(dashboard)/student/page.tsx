@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useMemo, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
+import { Suspense, useState, useMemo, useEffect, useCallback } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import Calendar from 'react-calendar';
 import {
   LineChart,
@@ -25,11 +25,25 @@ import {
   Calculator,
   ScanLine,
   Calendar as CalendarIcon,
+  BookOpen,
+  UserPlus,
+  Users,
 } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
-import { studentsAPI, attendanceAPI, leaveRequestsAPI } from '@/lib/api';
+import { attendanceAPI, enrollmentsAPI, leaveRequestsAPI } from '@/lib/api';
 
 const LINE_COLORS = ['#8884d8', '#82ca9d', '#ffc658', '#ff8042', '#0088FE', '#d0417e', '#7e57c2'];
+
+interface CourseSummary {
+  _id: string;
+  name: string;
+  teacherId: string;
+  teacherName: string;
+  capacity: number;
+  enrolled: number;
+  seatsLeft: number;
+  enrollmentOpen: boolean;
+}
 
 interface Enrollment {
   _id: string;
@@ -37,11 +51,7 @@ interface Enrollment {
   rollNo: number;
   attended: number;
   total: number;
-  class: {
-    _id: string;
-    name: string;
-    teacherId: string;
-  } | null;
+  class: CourseSummary | null;
 }
 
 interface LeaveRequestData {
@@ -343,8 +353,11 @@ const WeeklyTrendChart = ({
   );
 };
 
-export default function StudentDashboard() {
-  const [activeView, setActiveView] = useState('overview');
+function StudentDashboardContent() {
+  const searchParams = useSearchParams();
+  const [activeView, setActiveView] = useState(
+    searchParams.get('view') === 'courses' ? 'courses' : 'overview'
+  );
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isSimulatorModalOpen, setIsSimulatorModalOpen] = useState(false);
   const [isLeaveModalOpen, setIsLeaveModalOpen] = useState(false);
@@ -361,6 +374,10 @@ export default function StudentDashboard() {
   >({});
   const [leaveRequests, setLeaveRequests] = useState<LeaveRequestData[]>([]);
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
+  // Courses the student may still register for
+  const [availableCourses, setAvailableCourses] = useState<CourseSummary[]>([]);
+  const [busyCourseId, setBusyCourseId] = useState<string | null>(null);
+  const [courseMessage, setCourseMessage] = useState('');
 
   const subjects = useMemo(
     () =>
@@ -378,30 +395,35 @@ export default function StudentDashboard() {
     [enrollments]
   );
 
-  const fetchData = async (userId: string) => {
+  const fetchData = useCallback(async (userId: string) => {
     try {
-      // 1. Enrollments (subject-wise attendance + class names)
-      const enrollResult = await studentsAPI.getByUser(userId);
-      const studentEnrollments: Enrollment[] = enrollResult.students || [];
+      // 1. Enrollments + the courses still open for registration
+      const enrollResult = await enrollmentsAPI.getForUser(userId);
+      const studentEnrollments: Enrollment[] = enrollResult.enrollments || [];
       setEnrollments(studentEnrollments);
+      setAvailableCourses(enrollResult.availableCourses || []);
 
       // 2. Attendance history per enrollment for the calendar & trends
-      const history: Record<string, Record<string, string>> = {};
-      await Promise.all(
+      const histories = await Promise.all(
         studentEnrollments.map(async (enrollment) => {
-          if (!enrollment.class) return;
+          if (!enrollment.class) return null;
           try {
             const result = await attendanceAPI.get({ studentId: enrollment._id });
-            const records = result.records || [];
-            records.forEach((record: { date: string; status: string }) => {
-              if (!history[record.date]) history[record.date] = {};
-              history[record.date][enrollment.class!.name] = record.status;
-            });
+            return { subject: enrollment.class.name, records: result.records || [] };
           } catch (err) {
             console.error('Error fetching attendance for', enrollment._id, err);
+            return null;
           }
         })
       );
+
+      const history: Record<string, Record<string, string>> = {};
+      for (const entry of histories) {
+        if (!entry) continue;
+        for (const record of entry.records as { date: string; status: string }[]) {
+          history[record.date] = { ...history[record.date], [entry.subject]: record.status };
+        }
+      }
       setAttendanceHistory(history);
 
       // 3. Leave requests
@@ -417,6 +439,36 @@ export default function StudentDashboard() {
     } finally {
       setLoading(false);
     }
+  }, []);
+
+  const handleRegisterCourse = async (course: CourseSummary) => {
+    if (!user) return;
+    setBusyCourseId(course._id);
+    setCourseMessage('');
+    try {
+      await enrollmentsAPI.register(user.id, course._id);
+      setCourseMessage(`You are now registered for ${course.name}.`);
+      await fetchData(user.id);
+    } catch (err) {
+      setCourseMessage(err instanceof Error ? err.message : 'Registration failed');
+    } finally {
+      setBusyCourseId(null);
+    }
+  };
+
+  const handleWithdrawCourse = async (enrollment: Enrollment) => {
+    if (!user || !enrollment.class) return;
+    setBusyCourseId(enrollment.class._id);
+    setCourseMessage('');
+    try {
+      await enrollmentsAPI.withdraw(user.id, enrollment.class._id);
+      setCourseMessage(`You have withdrawn from ${enrollment.class.name}.`);
+      await fetchData(user.id);
+    } catch (err) {
+      setCourseMessage(err instanceof Error ? err.message : 'Could not withdraw');
+    } finally {
+      setBusyCourseId(null);
+    }
   };
 
   useEffect(() => {
@@ -425,9 +477,10 @@ export default function StudentDashboard() {
       router.push('/login');
       return;
     }
+    // Deferred a microtask so the fetch's state updates never run synchronously
+    // inside the effect body (avoids cascading renders).
     void Promise.resolve().then(() => fetchData(user.id));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isReady, user]);
+  }, [isReady, user, router, fetchData]);
 
   const calculatePercentage = (attended: number, total: number) =>
     total > 0 ? parseFloat(((attended / total) * 100).toFixed(1)) : 0;
@@ -460,13 +513,9 @@ export default function StudentDashboard() {
     try {
       const result = await leaveRequestsAPI.create({
         studentId: user.id,
-        studentName: user.name || enrollment.name,
-        rollNo: enrollment.rollNo,
-        subject: newRequest.subject,
+        classId: enrollment.class._id,
         date: newRequest.date,
         reason: newRequest.reason,
-        classId: enrollment.class._id,
-        teacherId: enrollment.class.teacherId,
       });
       if (result.success) {
         setLeaveRequests((prev) => [result.leaveRequest, ...prev]);
@@ -516,8 +565,14 @@ export default function StudentDashboard() {
       </div>
       <h2 className="text-xl font-bold mb-4">Subject-wise Overview</h2>
       {attendance.length === 0 ? (
-        <div className="bg-white shadow-lg rounded-2xl p-10 text-center text-gray-500">
-          You are not enrolled in any class yet.
+        <div className="bg-white shadow-lg rounded-2xl p-10 text-center">
+          <p className="text-gray-500">You are not registered for any course yet.</p>
+          <button
+            onClick={() => setActiveView('courses')}
+            className="mt-4 rounded-lg bg-orange-600 px-6 py-2 font-semibold text-white hover:bg-orange-700"
+          >
+            Browse courses
+          </button>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -632,6 +687,82 @@ export default function StudentDashboard() {
     );
   };
 
+  const renderCourses = () => (
+    <div className="space-y-8">
+      {courseMessage && (
+        <div className="rounded-xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-800">
+          {courseMessage}
+        </div>
+      )}
+
+      <section>
+        <h2 className="mb-4 flex items-center gap-2 text-2xl font-bold">
+          <BookOpen size={22} /> My Courses
+        </h2>
+        {enrollments.length === 0 ? (
+          <div className="rounded-2xl bg-white p-10 text-center text-gray-500 shadow-lg">
+            You have not registered for any course yet. Pick one below to start marking attendance.
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
+            {enrollments.map((enrollment) => (
+              <div key={enrollment._id} className="rounded-2xl bg-white p-6 shadow-lg">
+                <h3 className="text-lg font-semibold">{enrollment.class?.name ?? 'Unknown course'}</h3>
+                <p className="mt-1 text-sm text-gray-500">
+                  {enrollment.class?.teacherName ?? 'Unassigned'} &middot; Roll no {enrollment.rollNo}
+                </p>
+                <p className="mt-3 text-sm text-gray-600">
+                  {enrollment.attended}/{enrollment.total} classes attended
+                </p>
+                <button
+                  onClick={() => handleWithdrawCourse(enrollment)}
+                  disabled={busyCourseId === enrollment.class?._id}
+                  className="mt-4 w-full rounded-lg border border-red-200 px-4 py-2 text-sm font-medium text-red-600 hover:bg-red-50 disabled:opacity-50"
+                >
+                  {busyCourseId === enrollment.class?._id ? 'Working...' : 'Withdraw'}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
+      <section>
+        <h2 className="mb-4 flex items-center gap-2 text-2xl font-bold">
+          <UserPlus size={22} /> Available Courses
+        </h2>
+        <p className="mb-4 text-sm text-gray-600">
+          You can only mark attendance for courses you are registered in.
+        </p>
+        {availableCourses.length === 0 ? (
+          <div className="rounded-2xl bg-white p-10 text-center text-gray-500 shadow-lg">
+            No courses are open for registration right now.
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
+            {availableCourses.map((course) => (
+              <div key={course._id} className="rounded-2xl bg-white p-6 shadow-lg">
+                <h3 className="text-lg font-semibold">{course.name}</h3>
+                <p className="mt-1 text-sm text-gray-500">{course.teacherName}</p>
+                <p className="mt-3 flex items-center gap-2 text-sm text-gray-600">
+                  <Users size={16} /> {course.enrolled}/{course.capacity} enrolled
+                  <span className="text-gray-400">({course.seatsLeft} seats left)</span>
+                </p>
+                <button
+                  onClick={() => handleRegisterCourse(course)}
+                  disabled={busyCourseId === course._id}
+                  className="mt-4 w-full rounded-lg bg-orange-600 px-4 py-2 text-sm font-semibold text-white hover:bg-orange-700 disabled:opacity-50"
+                >
+                  {busyCourseId === course._id ? 'Registering...' : 'Register'}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+    </div>
+  );
+
   const renderLeaveRequests = () => (
     <div>
       <div className="flex justify-between items-center mb-6">
@@ -735,6 +866,14 @@ export default function StudentDashboard() {
             <CalendarIcon className="w-5 h-5" /> Attendance
           </button>
           <button
+            onClick={() => setActiveView('courses')}
+            className={`flex items-center gap-2 p-2 rounded w-full text-left ${
+              activeView === 'courses' ? 'bg-orange-600' : 'hover:bg-orange-600'
+            }`}
+          >
+            <BookOpen className="w-5 h-5" /> My Courses
+          </button>
+          <button
             onClick={() => setActiveView('leave')}
             className={`flex items-center gap-2 p-2 rounded w-full text-left ${
               activeView === 'leave' ? 'bg-orange-600' : 'hover:bg-orange-600'
@@ -761,8 +900,23 @@ export default function StudentDashboard() {
         )}
         {activeView === 'overview' && renderOverview()}
         {activeView === 'attendance' && renderAttendanceCalendar()}
+        {activeView === 'courses' && renderCourses()}
         {activeView === 'leave' && renderLeaveRequests()}
       </main>
     </div>
+  );
+}
+
+export default function StudentDashboard() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex min-h-screen items-center justify-center bg-gray-100">
+          <p className="text-xl text-gray-600">Loading your dashboard...</p>
+        </div>
+      }
+    >
+      <StudentDashboardContent />
+    </Suspense>
   );
 }

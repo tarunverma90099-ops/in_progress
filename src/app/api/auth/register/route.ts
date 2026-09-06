@@ -1,62 +1,74 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest } from 'next/server';
 import bcrypt from 'bcryptjs';
-import connectDB from '@/lib/mongodb';
 import { User } from '@/models';
+import { badRequest, conflict, ok, readJson, route } from '@/lib/http';
 
-export async function POST(request: NextRequest) {
-  try {
-    await connectDB();
-    
-    const body = await request.json();
-    const { email, password, name, role, rollNo, department, phone } = body;
+const ROLES = ['student', 'teacher', 'admin'] as const;
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const MIN_PASSWORD_LENGTH = 8;
 
-    if (!email || !password || !name || !role) {
-      return NextResponse.json(
-        { error: 'Email, password, name, and role are required' },
-        { status: 400 }
-      );
-    }
+interface RegisterBody {
+  email?: string;
+  password?: string;
+  name?: string;
+  role?: string;
+  rollNo?: string;
+  department?: string;
+  phone?: string;
+}
 
-    // Check if user already exists
-    const existingUser = await User.findOne({ email: email.toLowerCase() });
-    
-    if (existingUser) {
-      return NextResponse.json(
-        { error: 'User with this email already exists' },
-        { status: 409 }
-      );
-    }
+export const POST = route('Registration', async (request: NextRequest) => {
+  const body = await readJson<RegisterBody>(request);
+  const email = String(body.email ?? '').trim().toLowerCase();
+  const name = String(body.name ?? '').trim();
+  const password = String(body.password ?? '');
+  const role = String(body.role ?? '').trim();
 
-    // Hash password
-    const salt = await bcrypt.genSalt(10);
-    const hashedPassword = await bcrypt.hash(password, salt);
+  if (!email || !password || !name || !role) {
+    throw badRequest('Email, password, name, and role are required');
+  }
+  if (!EMAIL_RE.test(email)) {
+    throw badRequest('Enter a valid email address');
+  }
+  if (password.length < MIN_PASSWORD_LENGTH) {
+    throw badRequest(`Password must be at least ${MIN_PASSWORD_LENGTH} characters`);
+  }
+  if (!ROLES.includes(role as (typeof ROLES)[number])) {
+    throw badRequest(`Role must be one of: ${ROLES.join(', ')}`);
+  }
 
-    // Create new user
-    const newUser = await User.create({
-      email: email.toLowerCase(),
-      password: hashedPassword,
-      name,
-      role,
-      rollNo,
-      department,
-      phone,
-    });
+  const rollNo = body.rollNo ? String(body.rollNo).trim() : undefined;
+  if (role === 'student' && !rollNo) {
+    throw badRequest('Roll number is required for students');
+  }
 
-    return NextResponse.json({
-      success: true,
-      message: 'User registered successfully',
+  if (await User.exists({ email })) {
+    throw conflict('An account with this email already exists');
+  }
+
+  const hashedPassword = await bcrypt.hash(password, 10);
+
+  const newUser = await User.create({
+    email,
+    password: hashedPassword,
+    name,
+    role,
+    rollNo,
+    department: body.department?.trim() || undefined,
+    phone: body.phone?.trim() || undefined,
+  });
+
+  return ok(
+    {
+      message: 'Account created successfully',
       user: {
         id: newUser._id,
         email: newUser.email,
         name: newUser.name,
         role: newUser.role,
+        rollNo: newUser.rollNo,
       },
-    });
-  } catch (error) {
-    console.error('Registration error:', error);
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    );
-  }
-}
+    },
+    201
+  );
+});

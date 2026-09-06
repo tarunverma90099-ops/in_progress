@@ -38,6 +38,7 @@ const UserSchema = new Schema<IUser>(
     },
     rollNo: {
       type: String,
+      trim: true,
       sparse: true,
     },
     department: {

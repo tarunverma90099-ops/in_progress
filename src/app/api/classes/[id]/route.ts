@@ -1,108 +1,57 @@
-import { NextRequest, NextResponse } from 'next/server';
-import connectDB from '@/lib/mongodb';
-import { Class, Student } from '@/models';
+import { NextRequest } from 'next/server';
+import { AttendanceRecord, Class, Session, Student } from '@/models';
+import { notFound, objectId, ok, readJson, route } from '@/lib/http';
 
-// GET single class by ID
-export async function GET(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  try {
-    await connectDB();
-    
-    const { id } = await params;
-    const cls = await Class.findById(id);
+type Ctx = { params: Promise<{ id: string }> };
 
-    if (!cls) {
-      return NextResponse.json(
-        { error: 'Class not found' },
-        { status: 404 }
-      );
-    }
+// Only these fields may be changed through the API.
+const EDITABLE = ['name', 'capacity', 'enrollmentOpen'] as const;
 
-    const students = await Student.find({ classId: id });
+/** GET /api/classes/:id — a class plus its roster. */
+export const GET = route('Get class', async (_request: NextRequest, ctx: Ctx) => {
+  const { id } = await ctx.params;
+  const classId = objectId(id, 'class ID');
 
-    return NextResponse.json({
-      success: true,
-      class: { ...cls.toObject(), students },
-    });
-  } catch (error) {
-    console.error('Get class error:', error);
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    );
+  const cls = await Class.findById(classId).lean();
+  if (!cls) throw notFound('Class not found');
+
+  const students = await Student.find({ classId }).sort({ rollNo: 1 }).lean();
+  return ok({ class: { ...cls, students } });
+});
+
+/** PUT /api/classes/:id — update editable class settings. */
+export const PUT = route('Update class', async (request: NextRequest, ctx: Ctx) => {
+  const { id } = await ctx.params;
+  const body = await readJson<Record<string, unknown>>(request);
+
+  const updates: Record<string, unknown> = {};
+  for (const field of EDITABLE) {
+    if (body[field] !== undefined) updates[field] = body[field];
   }
-}
 
-// PUT - Update class
-export async function PUT(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  try {
-    await connectDB();
-    
-    const { id } = await params;
-    const body = await request.json();
+  const cls = await Class.findByIdAndUpdate(
+    objectId(id, 'class ID'),
+    { $set: updates },
+    { new: true, runValidators: true }
+  );
 
-    const updatedClass = await Class.findByIdAndUpdate(
-      id,
-      { $set: body },
-      { returnDocument: 'after', runValidators: true }
-    );
+  if (!cls) throw notFound('Class not found');
+  return ok({ class: cls });
+});
 
-    if (!updatedClass) {
-      return NextResponse.json(
-        { error: 'Class not found' },
-        { status: 404 }
-      );
-    }
+/** DELETE /api/classes/:id — remove a class and everything hanging off it. */
+export const DELETE = route('Delete class', async (_request: NextRequest, ctx: Ctx) => {
+  const { id } = await ctx.params;
+  const classId = objectId(id, 'class ID');
 
-    return NextResponse.json({
-      success: true,
-      class: updatedClass,
-    });
-  } catch (error) {
-    console.error('Update class error:', error);
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    );
-  }
-}
+  const cls = await Class.findByIdAndDelete(classId);
+  if (!cls) throw notFound('Class not found');
 
-// DELETE - Remove class
-export async function DELETE(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  try {
-    await connectDB();
-    
-    const { id } = await params;
-    
-    // Delete all students in this class
-    await Student.deleteMany({ classId: id });
-    
-    const deletedClass = await Class.findByIdAndDelete(id);
+  await Promise.all([
+    Student.deleteMany({ classId }),
+    AttendanceRecord.deleteMany({ classId }),
+    Session.deleteMany({ classId }),
+  ]);
 
-    if (!deletedClass) {
-      return NextResponse.json(
-        { error: 'Class not found' },
-        { status: 404 }
-      );
-    }
-
-    return NextResponse.json({
-      success: true,
-      message: 'Class deleted successfully',
-    });
-  } catch (error) {
-    console.error('Delete class error:', error);
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    );
-  }
-}
+  return ok({ message: 'Class deleted successfully' });
+});
