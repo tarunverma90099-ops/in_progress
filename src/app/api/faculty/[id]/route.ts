@@ -1,110 +1,48 @@
-import { NextRequest, NextResponse } from 'next/server';
-import connectDB from '@/lib/mongodb';
+import { NextRequest } from 'next/server';
 import { Faculty, User } from '@/models';
+import { notFound, objectId, ok, readJson, route } from '@/lib/http';
 
-// GET single faculty by ID
-export async function GET(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  try {
-    await connectDB();
-    
-    const { id } = await params;
-    const faculty = await Faculty.findById(id);
+type Ctx = { params: Promise<{ id: string }> };
 
-    if (!faculty) {
-      return NextResponse.json(
-        { error: 'Faculty not found' },
-        { status: 404 }
-      );
-    }
+const EDITABLE = ['name', 'department', 'status', 'photo', 'subjects', 'attendance'] as const;
 
-    return NextResponse.json({
-      success: true,
-      faculty,
-    });
-  } catch (error) {
-    console.error('Get faculty error:', error);
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    );
+/** GET /api/faculty/:id */
+export const GET = route('Get faculty', async (_request: NextRequest, ctx: Ctx) => {
+  const { id } = await ctx.params;
+  const faculty = await Faculty.findById(objectId(id, 'faculty ID')).lean();
+  if (!faculty) throw notFound('Faculty not found');
+  return ok({ faculty });
+});
+
+/** PUT /api/faculty/:id */
+export const PUT = route('Update faculty', async (request: NextRequest, ctx: Ctx) => {
+  const { id } = await ctx.params;
+  const body = await readJson<Record<string, unknown>>(request);
+
+  const updates: Record<string, unknown> = {};
+  for (const field of EDITABLE) {
+    if (body[field] !== undefined) updates[field] = body[field];
   }
-}
 
-// PUT - Update faculty
-export async function PUT(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  try {
-    await connectDB();
-    
-    const { id } = await params;
-    const body = await request.json();
+  const faculty = await Faculty.findByIdAndUpdate(
+    objectId(id, 'faculty ID'),
+    { $set: updates },
+    { new: true, runValidators: true }
+  );
 
-    const updatedFaculty = await Faculty.findByIdAndUpdate(
-      id,
-      { $set: body },
-      { returnDocument: 'after', runValidators: true }
-    );
+  if (!faculty) throw notFound('Faculty not found');
+  return ok({ faculty });
+});
 
-    if (!updatedFaculty) {
-      return NextResponse.json(
-        { error: 'Faculty not found' },
-        { status: 404 }
-      );
-    }
+/** DELETE /api/faculty/:id — also removes the login when no profile still uses it. */
+export const DELETE = route('Delete faculty', async (_request: NextRequest, ctx: Ctx) => {
+  const { id } = await ctx.params;
+  const faculty = await Faculty.findByIdAndDelete(objectId(id, 'faculty ID'));
+  if (!faculty) throw notFound('Faculty not found');
 
-    return NextResponse.json({
-      success: true,
-      faculty: updatedFaculty,
-    });
-  } catch (error) {
-    console.error('Update faculty error:', error);
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    );
+  if (faculty.userId && !(await Faculty.exists({ userId: faculty.userId }))) {
+    await User.findByIdAndDelete(faculty.userId);
   }
-}
 
-// DELETE - Remove faculty
-export async function DELETE(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  try {
-    await connectDB();
-    
-    const { id } = await params;
-    const deletedFaculty = await Faculty.findByIdAndDelete(id);
-
-    if (!deletedFaculty) {
-      return NextResponse.json(
-        { error: 'Faculty not found' },
-        { status: 404 }
-      );
-    }
-
-    // Also remove the faculty's linked user account (if not linked to other profiles)
-    if (deletedFaculty.userId) {
-      const stillLinked = await Faculty.findOne({ userId: deletedFaculty.userId });
-      if (!stillLinked) {
-        await User.findByIdAndDelete(deletedFaculty.userId);
-      }
-    }
-
-    return NextResponse.json({
-      success: true,
-      message: 'Faculty deleted successfully',
-    });
-  } catch (error) {
-    console.error('Delete faculty error:', error);
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    );
-  }
-}
+  return ok({ message: 'Faculty deleted successfully' });
+});

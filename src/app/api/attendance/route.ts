@@ -1,172 +1,126 @@
-import { NextRequest, NextResponse } from 'next/server';
-import connectDB from '@/lib/mongodb';
-import { Student, Class, AttendanceRecord, StudentAttendance } from '@/models';
+import { NextRequest } from 'next/server';
+import { AttendanceRecord, Student } from '@/models';
+import { badRequest, objectId, ok, readJson, route, toDateStr } from '@/lib/http';
+import {
+  ATTENDANCE_STATUSES,
+  bulkUpsertAttendance,
+  isAttendanceStatus,
+  recordSessionHistory,
+  requireClass,
+  resolveEnrollments,
+} from '@/lib/attendance';
 
-// GET attendance records
-export async function GET(request: NextRequest) {
-  try {
-    await connectDB();
+/**
+ * GET /api/attendance?studentId=&classId=&date=
+ *
+ * `studentId` accepts a comma-separated list so a dashboard can load every
+ * enrollment's history in one request instead of one request per course.
+ */
+export const GET = route('Get attendance', async (request: NextRequest) => {
+  const params = request.nextUrl.searchParams;
+  const query: Record<string, unknown> = {};
 
-    const { searchParams } = new URL(request.url);
-    const studentId = searchParams.get('studentId');
-    const classId = searchParams.get('classId');
-    const date = searchParams.get('date');
+  const studentId = params.get('studentId');
+  const classId = params.get('classId');
+  const date = params.get('date');
 
-    let query: Record<string, unknown> = {};
-    if (studentId) query.studentId = studentId;
-    if (classId) query.classId = classId;
-    if (date) query.date = date;
+  if (studentId) {
+    const ids = studentId
+      .split(',')
+      .map((id) => id.trim())
+      .filter(Boolean)
+      .map((id) => objectId(id, 'student ID'));
 
-    const records = await AttendanceRecord.find(query).sort({ date: 1 });
-
-    return NextResponse.json({
-      success: true,
-      records,
-    });
-  } catch (error) {
-    console.error('Get attendance error:', error);
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    );
+    if (ids.length === 0) throw badRequest('Invalid student ID');
+    query.studentId = ids.length === 1 ? ids[0] : { $in: ids };
   }
+  if (classId) query.classId = objectId(classId, 'class ID');
+  if (date) query.date = toDateStr(date);
+
+  if (Object.keys(query).length === 0) {
+    throw badRequest('Provide at least one of studentId, classId or date');
+  }
+
+  const records = await AttendanceRecord.find(query).sort({ date: 1 }).lean();
+  return ok({ records });
+});
+
+interface MarkBody {
+  classId?: string;
+  date?: string;
+  attendanceData?: { studentId?: string; status?: string }[];
 }
 
-// POST - Mark attendance
-// Body: { classId, date, attendanceData: [{ studentId, status: 'Present' | 'Absent' | 'Leave' }] }
-// Re-marking an existing (studentId, classId, date) record adjusts the aggregate
-// stats by the difference between the old and new status instead of double counting.
-export async function POST(request: NextRequest) {
-  try {
-    await connectDB();
+/**
+ * POST /api/attendance
+ * Body: { classId, date, attendanceData: [{ studentId, status }] }
+ *
+ * `studentId` may be an enrollment id or a user id; either way the student must
+ * be enrolled in `classId` or the whole request is rejected. Re-marking an
+ * existing record adjusts aggregates by the delta instead of double counting.
+ */
+export const POST = route('Mark attendance', async (request: NextRequest) => {
+  const body = await readJson<MarkBody>(request);
+  const classId = objectId(body.classId, 'class ID');
 
-    const body = await request.json();
-    const { classId, date, attendanceData } = body;
-
-    // attendanceData is an array of { studentId, status: 'Present' | 'Absent' | 'Leave' }
-
-    if (!classId || !date || !attendanceData || !Array.isArray(attendanceData)) {
-      return NextResponse.json(
-        { error: 'Class ID, date, and attendance data are required' },
-        { status: 400 }
-      );
-    }
-
-    const cls = await Class.findById(classId);
-    if (!cls) {
-      return NextResponse.json(
-        { error: 'Class not found' },
-        { status: 404 }
-      );
-    }
-
-    const subject = cls.name;
-    const normalizedDate = new Date(date).toISOString().split('T')[0];
-
-    const results = await Promise.all(
-      attendanceData.map(async (record: { studentId: string; status: string }) => {
-        const { studentId, status } = record;
-
-        if (!['Present', 'Absent', 'Leave'].includes(status)) {
-          throw new Error(`Invalid status "${status}" for student ${studentId}`);
-        }
-
-        const existing = await AttendanceRecord.findOne({ studentId, classId, date: normalizedDate });
-
-        // Deltas so re-marking never double counts
-        const wasPresent = existing?.status === 'Present' ? 1 : 0;
-        const isPresent = status === 'Present' ? 1 : 0;
-        const attendedDelta = isPresent - wasPresent;
-
-        const attendanceRecord = await AttendanceRecord.findOneAndUpdate(
-          { studentId, classId, date: normalizedDate },
-          { status },
-          { returnDocument: 'after', upsert: true }
-        );
-
-        // Only apply aggregate deltas the first time a record is created
-        let updatedStudent: unknown = null;
-        if (!existing) {
-          await StudentAttendance.findOneAndUpdate(
-            { studentId, subject },
-            {
-              $inc: {
-                total: 1,
-                ...(isPresent ? { attended: 1 } : {}),
-              },
-              $push: {
-                history: { date: normalizedDate, status },
-              },
-            },
-            { returnDocument: 'after', upsert: true }
-          );
-
-          updatedStudent = await Student.findByIdAndUpdate(
-            studentId,
-            { $inc: { attended: attendedDelta, total: 1 } },
-            { returnDocument: 'after' }
-          );
-        } else if (attendedDelta !== 0) {
-          // Record existed and status flipped — adjust aggregates
-          await StudentAttendance.findOneAndUpdate(
-            { studentId, subject },
-            {
-              $inc: { attended: attendedDelta },
-              $set: { 'history.$[elem].status': status },
-            },
-            {
-              returnDocument: 'after',
-              arrayFilters: [{ 'elem.date': normalizedDate }],
-            }
-          );
-
-          updatedStudent = await Student.findByIdAndUpdate(
-            studentId,
-            { $inc: { attended: attendedDelta } },
-            { returnDocument: 'after' }
-          );
-        } else {
-          updatedStudent = await Student.findById(studentId);
-        }
-
-        return { attendanceRecord, student: updatedStudent };
-      })
-    );
-
-    // If the whole class was marked in one go, reflect it in the class session history
-    const enrolledCount = await Student.countDocuments({ classId });
-    if (attendanceData.length >= enrolledCount && enrolledCount > 0) {
-      const presentCount = attendanceData.filter(
-        (r: { status: string }) => r.status === 'Present'
-      ).length;
-
-      const cls2 = await Class.findById(classId);
-      const existingEntry = cls2?.sessionHistory?.find((s: { date: string }) => s.date === normalizedDate);
-
-      if (existingEntry) {
-        await Class.updateOne(
-          { classId, 'sessionHistory.date': normalizedDate },
-          { $set: { 'sessionHistory.$.present': presentCount } }
-        );
-      } else {
-        await Class.findByIdAndUpdate(classId, {
-          $push: { sessionHistory: { date: normalizedDate, present: presentCount } },
-        });
-      }
-    }
-
-    return NextResponse.json({
-      success: true,
-      message: 'Attendance marked successfully',
-      results,
-    });
-  } catch (error) {
-    console.error('Mark attendance error:', error);
-    const message = error instanceof Error ? error.message : 'Internal server error';
-    const status = message.startsWith('Invalid status') ? 400 : 500;
-    return NextResponse.json(
-      { error: status === 400 ? message : 'Internal server error' },
-      { status }
-    );
+  if (!body.date || !Array.isArray(body.attendanceData) || body.attendanceData.length === 0) {
+    throw badRequest('Class ID, date, and a non-empty attendance list are required');
   }
-}
+
+  const date = toDateStr(body.date);
+
+  // Validate the payload before touching the database.
+  const refs = body.attendanceData.map((entry) => {
+    const studentRef = objectId(entry.studentId, 'student ID');
+    if (!isAttendanceStatus(entry.status)) {
+      throw badRequest(`Status must be one of: ${ATTENDANCE_STATUSES.join(', ')}`);
+    }
+    return { studentRef, status: entry.status };
+  });
+
+  if (new Set(refs.map((r) => r.studentRef)).size !== refs.length) {
+    throw badRequest('Duplicate student in attendance list');
+  }
+
+  // Authorise every student up front: one unenrolled student rejects the batch,
+  // so a partially-applied roster can never be written.
+  const [cls, byRef] = await Promise.all([
+    requireClass(classId),
+    resolveEnrollments(
+      refs.map((r) => r.studentRef),
+      classId
+    ),
+  ]);
+
+  const entries = refs.map(({ studentRef, status }) => ({
+    enrollment: byRef.get(studentRef)!,
+    status,
+  }));
+
+  // Guard against two references (enrollment id + user id) for the same student.
+  if (new Set(entries.map((e) => String(e.enrollment._id))).size !== entries.length) {
+    throw badRequest('Duplicate student in attendance list');
+  }
+
+  await bulkUpsertAttendance({
+    entries: entries.map((e) => ({ enrollmentId: String(e.enrollment._id), status: e.status })),
+    classId,
+    subject: cls.name,
+    date,
+  });
+
+  const results = entries.map(({ enrollment, status }) => ({
+    studentId: enrollment._id,
+    rollNo: enrollment.rollNo,
+    status,
+  }));
+
+  // Once the whole roster is marked, reflect the day in the class history.
+  const enrolledCount = await Student.countDocuments({ classId });
+  if (enrolledCount > 0 && entries.length >= enrolledCount) {
+    const presentCount = entries.filter((e) => e.status === 'Present').length;
+    await recordSessionHistory(classId, date, presentCount);
+  }
+
+  return ok({ message: 'Attendance recorded', date, results });
+});

@@ -46,6 +46,7 @@ export const authAPI = {
     role: string;
     rollNo?: string;
     department?: string;
+    phone?: string;
   }) =>
     apiRequest('/auth/register', {
       method: 'POST',
@@ -98,7 +99,7 @@ export const classesAPI = {
 
   getById: (id: string) => apiRequest(`/classes/${id}`),
 
-  create: (classData: { name: string; teacherId: string; totalStudents?: number }) =>
+  create: (classData: { name: string; teacherId: string; capacity?: number }) =>
     apiRequest('/classes', {
       method: 'POST',
       body: classData,
@@ -145,11 +146,33 @@ export const studentsAPI = {
     }),
 };
 
+// Enrollments API — student self-registration into courses
+export const enrollmentsAPI = {
+  /** Courses the student is enrolled in + courses still open to register for */
+  getForUser: (userId: string) => apiRequest(`/enrollments?userId=${userId}`),
+
+  register: (userId: string, classId: string, rollNo?: string | number) =>
+    apiRequest('/enrollments', {
+      method: 'POST',
+      body: { userId, classId, rollNo },
+    }),
+
+  withdraw: (userId: string, classId: string) =>
+    apiRequest(`/enrollments?userId=${userId}&classId=${classId}`, {
+      method: 'DELETE',
+    }),
+};
+
 // Attendance API
 export const attendanceAPI = {
-  get: (params: { studentId?: string; classId?: string; date?: string }) => {
+  get: (params: { studentId?: string | string[]; classId?: string; date?: string }) => {
     const queryParams = new URLSearchParams();
-    if (params.studentId) queryParams.append('studentId', params.studentId);
+    if (params.studentId) {
+      // The API accepts a comma-separated list, so several enrollments can be
+      // fetched in a single round trip.
+      const ids = Array.isArray(params.studentId) ? params.studentId : [params.studentId];
+      if (ids.length > 0) queryParams.append('studentId', ids.join(','));
+    }
     if (params.classId) queryParams.append('classId', params.classId);
     if (params.date) queryParams.append('date', params.date);
     return apiRequest(`/attendance?${queryParams.toString()}`);
@@ -184,13 +207,9 @@ export const leaveRequestsAPI = {
 
   create: (requestData: {
     studentId: string;
-    studentName: string;
-    rollNo: number;
-    subject: string;
+    classId: string;
     date: string;
     reason: string;
-    classId: string;
-    teacherId: string;
   }) =>
     apiRequest('/leave-requests', {
       method: 'POST',

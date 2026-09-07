@@ -7,17 +7,10 @@ out
 build
 next-env.d.ts
 
-# Environment variables
+# Environment variables (the committed .env.example is the template)
 .env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
-mongodb/.env
-
-# Local MongoDB data (mongodb/run.sh, dump files, dbpath)
-mongodb/data
-mongodb/*.log
+.env*.local
+!.env.example
 
 # Misc
 .DS_Store

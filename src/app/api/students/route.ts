@@ -1,125 +1,93 @@
-import { NextRequest, NextResponse } from 'next/server';
-import connectDB from '@/lib/mongodb';
-import { Student, Class, User } from '@/models';
+import { NextRequest } from 'next/server';
+import { Class, Student, User } from '@/models';
+import { badRequest, conflict, emailFilter, notFound, objectId, ok, readJson, route } from '@/lib/http';
+import { syncEnrolledCount } from '@/lib/attendance';
 
-// GET students for a class, or all enrollments of a user
-export async function GET(request: NextRequest) {
-  try {
-    await connectDB();
-    
-    const { searchParams } = new URL(request.url);
-    const classId = searchParams.get('classId');
-    const userId = searchParams.get('userId');
+/** GET /api/students?classId=... | ?userId=... — class roster or a user's enrollments. */
+export const GET = route('Get students', async (request: NextRequest) => {
+  const params = request.nextUrl.searchParams;
+  const classId = params.get('classId');
+  const userId = params.get('userId');
 
-    if (!classId && !userId) {
-      return NextResponse.json(
-        { error: 'Class ID or user ID is required' },
-        { status: 400 }
-      );
-    }
-
-    const query: Record<string, unknown> = classId ? { classId } : { userId };
-
-    const students = await Student.find(query).sort({ rollNo: 1 });
-
-    // Attach class info (name, teacher) so clients can show subject names
-    const studentsWithClass = await Promise.all(
-      students.map(async (student) => {
-        const cls = await Class.findById(student.classId).select('name teacherId');
-        return {
-          ...student.toObject(),
-          class: cls
-            ? { _id: cls._id, name: cls.name, teacherId: cls.teacherId }
-            : null,
-        };
-      })
-    );
-
-    return NextResponse.json({
-      success: true,
-      students: studentsWithClass,
-    });
-  } catch (error) {
-    console.error('Get students error:', error);
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    );
+  if (!classId && !userId) {
+    throw badRequest('Class ID or user ID is required');
   }
-}
 
-// POST - Add new student to a class
-export async function POST(request: NextRequest) {
-  try {
-    await connectDB();
-    
-    const body = await request.json();
-    const { classId, name, rollNo, email } = body;
+  const query = classId
+    ? { classId: objectId(classId, 'class ID') }
+    : { userId: objectId(userId, 'user ID') };
 
-    if (!classId || !name || !rollNo) {
-      return NextResponse.json(
-        { error: 'Class ID, name, and roll number are required' },
-        { status: 400 }
-      );
-    }
+  const students = await Student.find(query).sort({ rollNo: 1 }).lean();
 
-    // Check if class exists
-    const cls = await Class.findById(classId);
-    if (!cls) {
-      return NextResponse.json(
-        { error: 'Class not found' },
-        { status: 404 }
-      );
-    }
+  // Single lookup for all referenced classes instead of one query per student.
+  const classIds = [...new Set(students.map((s) => String(s.classId)))];
+  const classes = await Class.find({ _id: { $in: classIds } })
+    .select('name teacherId')
+    .lean();
+  const classById = new Map(classes.map((c) => [String(c._id), c]));
 
-    const rollNoNumber = parseInt(String(rollNo), 10);
-    if (Number.isNaN(rollNoNumber)) {
-      return NextResponse.json(
-        { error: 'Roll number must be a number' },
-        { status: 400 }
-      );
-    }
+  return ok({
+    students: students.map((student) => {
+      const cls = classById.get(String(student.classId));
+      return {
+        ...student,
+        class: cls ? { _id: cls._id, name: cls.name, teacherId: cls.teacherId } : null,
+      };
+    }),
+  });
+});
 
-    // Check if student with same roll number exists in this class
-    const existingStudent = await Student.findOne({ classId, rollNo: rollNoNumber });
-    if (existingStudent) {
-      return NextResponse.json(
-        { error: 'Student with this roll number already exists in this class' },
-        { status: 409 }
-      );
-    }
+/** POST /api/students — teacher/admin enrolls a student into a class. */
+export const POST = route('Add student', async (request: NextRequest) => {
+  const body = await readJson<{
+    classId?: string;
+    name?: string;
+    rollNo?: string | number;
+    email?: string;
+  }>(request);
 
-    // Link to an existing user account when one with this email exists
-    let linkedUserId: string | null = null;
-    if (email) {
-      const linkedUser = await User.findOne({ email: email.toLowerCase() });
-      if (linkedUser) linkedUserId = linkedUser._id as string;
-    }
+  const classId = objectId(body.classId, 'class ID');
+  const name = String(body.name ?? '').trim();
+  const email = body.email ? String(body.email).trim().toLowerCase() : undefined;
 
-    const newStudent = await Student.create({
-      userId: linkedUserId,
-      classId,
-      name,
-      rollNo: rollNoNumber,
-      email,
-      attended: 0,
-      total: 0,
-    });
+  if (!name) throw badRequest('Student name is required');
 
-    // Update total students count in class
-    await Class.findByIdAndUpdate(classId, {
-      $inc: { totalStudents: 1 }
-    });
-
-    return NextResponse.json({
-      success: true,
-      student: newStudent,
-    });
-  } catch (error) {
-    console.error('Add student error:', error);
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    );
+  const rollNo = Number.parseInt(String(body.rollNo ?? ''), 10);
+  if (!Number.isFinite(rollNo) || rollNo <= 0) {
+    throw badRequest('Roll number must be a positive number');
   }
-}
+
+  const cls = await Class.findById(classId);
+  if (!cls) throw notFound('Class not found');
+
+  if (await Student.exists({ classId, rollNo })) {
+    throw conflict('A student with this roll number is already enrolled in this class');
+  }
+
+  // Link to the login account when one exists so the student can scan QR codes.
+  const linkedUser = email
+    ? await User.findOne({ email: emailFilter(email), role: 'student' }).select('_id')
+    : null;
+  if (linkedUser && (await Student.exists({ classId, userId: linkedUser._id }))) {
+    throw conflict('This student account is already enrolled in this class');
+  }
+
+  const enrolledCount = await syncEnrolledCount(classId);
+  if (enrolledCount >= cls.capacity) {
+    throw conflict('This course is full');
+  }
+
+  const student = await Student.create({
+    userId: linkedUser?._id ?? null,
+    classId,
+    name,
+    rollNo,
+    email,
+    attended: 0,
+    total: 0,
+  });
+
+  await syncEnrolledCount(classId);
+
+  return ok({ student }, 201);
+});

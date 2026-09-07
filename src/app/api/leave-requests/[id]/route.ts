@@ -1,79 +1,49 @@
-import { NextRequest, NextResponse } from 'next/server';
-import connectDB from '@/lib/mongodb';
+import { NextRequest } from 'next/server';
 import { LeaveRequest } from '@/models';
+import { badRequest, notFound, objectId, ok, readJson, route } from '@/lib/http';
+import { requireClass, requireEnrollment, upsertAttendance } from '@/lib/attendance';
 
-// PUT - Update leave request status
-export async function PUT(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  try {
-    await connectDB();
-    
-    const { id } = await params;
-    const body = await request.json();
-    const { status } = body;
+type Ctx = { params: Promise<{ id: string }> };
+const STATUSES = ['Pending', 'Approved', 'Rejected'];
 
-    if (!status || !['Pending', 'Approved', 'Rejected'].includes(status)) {
-      return NextResponse.json(
-        { error: 'Valid status is required (Pending, Approved, or Rejected)' },
-        { status: 400 }
-      );
-    }
+/** PUT /api/leave-requests/:id — approve or reject a request. */
+export const PUT = route('Update leave request', async (request: NextRequest, ctx: Ctx) => {
+  const { id } = await ctx.params;
+  const { status } = await readJson<{ status?: string }>(request);
 
-    const updatedRequest = await LeaveRequest.findByIdAndUpdate(
-      id,
-      { status },
-      { returnDocument: 'after' }
-    );
-
-    if (!updatedRequest) {
-      return NextResponse.json(
-        { error: 'Leave request not found' },
-        { status: 404 }
-      );
-    }
-
-    return NextResponse.json({
-      success: true,
-      leaveRequest: updatedRequest,
-    });
-  } catch (error) {
-    console.error('Update leave request error:', error);
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    );
+  if (!status || !STATUSES.includes(status)) {
+    throw badRequest(`Status must be one of: ${STATUSES.join(', ')}`);
   }
-}
 
-// DELETE - Delete leave request
-export async function DELETE(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  try {
-    await connectDB();
-    
-    const { id } = await params;
-    const deletedRequest = await LeaveRequest.findByIdAndDelete(id);
+  const leaveRequest = await LeaveRequest.findByIdAndUpdate(
+    objectId(id, 'leave request ID'),
+    { status },
+    { new: true }
+  );
+  if (!leaveRequest) throw notFound('Leave request not found');
 
-    if (!deletedRequest) {
-      return NextResponse.json(
-        { error: 'Leave request not found' },
-        { status: 404 }
-      );
-    }
+  // Approving a leave writes it straight into that day's attendance.
+  if (status === 'Approved') {
+    const classId = String(leaveRequest.classId);
+    const enrollment = await requireEnrollment(String(leaveRequest.studentId), classId);
+    const cls = await requireClass(classId);
 
-    return NextResponse.json({
-      success: true,
-      message: 'Leave request deleted successfully',
+    await upsertAttendance({
+      enrollmentId: String(enrollment._id),
+      classId,
+      subject: cls.name,
+      date: leaveRequest.date,
+      status: 'Leave',
     });
-  } catch (error) {
-    console.error('Delete leave request error:', error);
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    );
   }
-}
+
+  return ok({ leaveRequest });
+});
+
+/** DELETE /api/leave-requests/:id */
+export const DELETE = route('Delete leave request', async (_request: NextRequest, ctx: Ctx) => {
+  const { id } = await ctx.params;
+  const deleted = await LeaveRequest.findByIdAndDelete(objectId(id, 'leave request ID'));
+  if (!deleted) throw notFound('Leave request not found');
+  return ok({ message: 'Leave request deleted successfully' });
+});

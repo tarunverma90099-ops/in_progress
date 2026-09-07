@@ -1,0 +1,10 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "paths": {
+      "@/models": ["./tests/memory-models.ts"],
+      "@/lib/mongodb": ["./tests/mongodb-stub.ts"],
+      "@/*": ["./src/*"]
+    }
+  }
+}

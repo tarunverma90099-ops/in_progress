@@ -1,86 +1,60 @@
-import { NextRequest, NextResponse } from 'next/server';
-import connectDB from '@/lib/mongodb';
+import { NextRequest } from 'next/server';
 import { Class, Student } from '@/models';
+import { badRequest, conflict, objectId, ok, readJson, route } from '@/lib/http';
 
-// GET all classes for a teacher
-export async function GET(request: NextRequest) {
-  try {
-    await connectDB();
-    
-    const { searchParams } = new URL(request.url);
-    const teacherId = searchParams.get('teacherId');
+/** GET /api/classes?teacherId=... — classes with their rosters attached. */
+export const GET = route('Get classes', async (request: NextRequest) => {
+  const teacherId = request.nextUrl.searchParams.get('teacherId');
+  const query = teacherId ? { teacherId: objectId(teacherId, 'teacher ID') } : {};
 
-    let query: Record<string, unknown> = {};
-    if (teacherId) {
-      query.teacherId = teacherId;
-    }
+  const classes = await Class.find(query).sort({ createdAt: -1 }).lean();
 
-    const classes = await Class.find(query).sort({ createdAt: -1 });
+  // One roster query for every class instead of N sequential queries.
+  const students = await Student.find({ classId: { $in: classes.map((c) => c._id) } })
+    .sort({ rollNo: 1 })
+    .lean();
 
-    // Get students count for each class
-    const classesWithStudents = await Promise.all(
-      classes.map(async (cls) => {
-        const students = await Student.find({ classId: cls._id });
-        return {
-          ...cls.toObject(),
-          students,
-        };
-      })
-    );
-
-    return NextResponse.json({
-      success: true,
-      classes: classesWithStudents,
-    });
-  } catch (error) {
-    console.error('Get classes error:', error);
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    );
+  const byClass = new Map<string, typeof students>();
+  for (const student of students) {
+    const key = String(student.classId);
+    const list = byClass.get(key) ?? [];
+    list.push(student);
+    byClass.set(key, list);
   }
-}
 
-// POST - Create new class
-export async function POST(request: NextRequest) {
-  try {
-    await connectDB();
-    
-    const body = await request.json();
-    const { name, teacherId, totalStudents } = body;
+  return ok({
+    classes: classes.map((cls) => ({
+      ...cls,
+      students: byClass.get(String(cls._id)) ?? [],
+    })),
+  });
+});
 
-    if (!name || !teacherId) {
-      return NextResponse.json(
-        { error: 'Name and teacherId are required' },
-        { status: 400 }
-      );
-    }
+/** POST /api/classes — create a course. */
+export const POST = route('Create class', async (request: NextRequest) => {
+  const body = await readJson<{ name?: string; teacherId?: string; capacity?: number }>(request);
 
-    // Check if class already exists for this teacher
-    const existingClass = await Class.findOne({ name, teacherId });
-    if (existingClass) {
-      return NextResponse.json(
-        { error: 'Class with this name already exists' },
-        { status: 409 }
-      );
-    }
+  const name = String(body.name ?? '').trim();
+  const teacherId = objectId(body.teacherId, 'teacher ID');
+  if (!name) throw badRequest('Class name is required');
 
-    const newClass = await Class.create({
-      name,
-      teacherId,
-      totalStudents: totalStudents || 40,
-      sessionHistory: [],
-    });
-
-    return NextResponse.json({
-      success: true,
-      class: newClass,
-    });
-  } catch (error) {
-    console.error('Create class error:', error);
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    );
+  const capacity = body.capacity === undefined ? 60 : Number(body.capacity);
+  if (!Number.isFinite(capacity) || capacity < 1) {
+    throw badRequest('Capacity must be a positive number');
   }
-}
+
+  if (await Class.exists({ name, teacherId })) {
+    throw conflict('A class with this name already exists for this teacher');
+  }
+
+  const created = await Class.create({
+    name,
+    teacherId,
+    capacity,
+    totalStudents: 0,
+    enrollmentOpen: true,
+    sessionHistory: [],
+  });
+
+  return ok({ class: created }, 201);
+});

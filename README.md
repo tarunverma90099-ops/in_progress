@@ -8,6 +8,11 @@ and college admins manage faculty — all backed by **Next.js (App Router)**, **
 ## Features
 
 ### For Students
+- **Self-registration** — students create their own account at `/register`
+  (name, email, roll number, password), then pick their courses
+- **Course registration** — the *My Courses* tab lists the courses the student is
+  enrolled in plus the courses still open, with live seat counts. **Attendance can
+  only ever be recorded for a course the student is registered in**
 - **Dashboard overview** — overall attendance percentage and subject-wise breakdown,
   with a "safe / below 75%" indicator
 - **QR check-in** — scan the QR code shown by the teacher (camera scanner via
@@ -50,7 +55,8 @@ and college admins manage faculty — all backed by **Next.js (App Router)**, **
 ├── src/
 │   ├── app/
 │   │   ├── (auth)/
-│   │   │   └── login/              # Login page (student / teacher / college)
+│   │   │   ├── login/              # Login page (student / teacher / college)
+│   │   │   └── register/           # Student self-registration
 │   │   ├── (dashboard)/
 │   │   │   ├── college/            # Admin: directory, add-faculty, faculty profile
 │   │   │   ├── student/
@@ -67,14 +73,17 @@ and college admins manage faculty — all backed by **Next.js (App Router)**, **
 │   ├── contexts/AuthContext.tsx    # JWT + user persisted in localStorage
 │   ├── lib/
 │   │   ├── api.ts                  # Typed fetch client for all endpoints
+│   │   ├── attendance.ts           # Enrollment checks + attendance aggregate updates
+│   │   ├── http.ts                 # Route wrapper: DB connect, validation, error mapping
 │   │   └── mongodb.ts              # Cached Mongoose connection
 │   └── models/                     # Mongoose schemas
 │       ├── User.ts  Faculty.ts  Class.ts  Student.ts
 │       ├── AttendanceRecord.ts  StudentAttendance.ts
 │       ├── LeaveRequest.ts  Session.ts  index.ts
-├── scripts/api-tests.sh            # End-to-end API smoke tests (62 assertions)
-├── frontend-analysis/              # Legacy Vite prototype (reference only)
-└── mongodb/                        # Local MongoDB notes / helper files
+└── tests/                          # API handler tests (npm test)
+    ├── api.test.ts                 # 28 end-to-end route assertions
+    ├── memory-models.ts            # In-memory stand-in for the Mongoose models
+    └── mongodb-stub.ts
 ```
 
 ## Setup Instructions
@@ -88,24 +97,24 @@ and college admins manage faculty — all backed by **Next.js (App Router)**, **
 
 ```bash
 git clone <repository-url>
-cd syntex-terrors
+cd in_progress
 npm install
 ```
 
 ### Step 2 — Configure environment variables
 
-Copy `.env.example` to `.env.local` in the project root and set the values:
+Copy `.env.example` to `.env.local` and fill in the values:
 
 ```env
 # MongoDB connection (local server)
-MONGODB_URI=mongodb://127.0.0.1:27017/syntex-terrors
+MONGODB_URI=mongodb://127.0.0.1:27017/track-attend
 
 # Secret used to sign JWTs — change this in production!
 JWT_SECRET=change-me-to-a-long-random-string
 ```
 
 > For MongoDB Atlas, use the SRV string from the Atlas UI:
-> `MONGODB_URI=mongodb+srv://<user>:<password>@cluster0.xxxxx.mongodb.net/syntex-terrors`
+> `MONGODB_URI=mongodb+srv://<user>:<password>@cluster0.xxxxx.mongodb.net/track-attend`
 > (URL-encode special characters in the password.)
 
 Both variables are required. This makes a missing configuration fail clearly instead
@@ -206,7 +215,7 @@ All endpoints return JSON. Errors use `{ "error": "message" }` with an appropria
 | Method | Path                | Description                                              |
 |--------|---------------------|----------------------------------------------------------|
 | POST   | `/api/auth/login`   | `{ email, password, role }` → `{ token, user }`          |
-| POST   | `/api/auth/register`| `{ email, password, name, role, rollNo?, department? }`  |
+| POST   | `/api/auth/register`| `{ email, password, name, role, rollNo?, department?, phone? }` → 201. Validates email format, 8-char minimum password, and requires `rollNo` for students |
 
 ### Faculty
 | Method | Path                 | Description                                             |
@@ -221,10 +230,17 @@ All endpoints return JSON. Errors use `{ "error": "message" }` with an appropria
 | Method | Path                 | Description                                             |
 |--------|----------------------|---------------------------------------------------------|
 | GET    | `/api/classes`       | List classes (`?teacherId=`), each with its students    |
-| POST   | `/api/classes`       | `{ name, teacherId, totalStudents? }`                   |
+| POST   | `/api/classes`       | `{ name, teacherId, capacity? }` (capacity default 60)  |
 | GET    | `/api/classes/:id`   | Get one class with students                             |
 | PUT    | `/api/classes/:id`   | Update (e.g. rename)                                    |
 | DELETE | `/api/classes/:id`   | Delete class + cascade-delete its roster                |
+
+### Enrollments (student course registration)
+| Method | Path                    | Description                                          |
+|--------|-------------------------|------------------------------------------------------|
+| GET    | `/api/enrollments`      | `?userId=` → the student's courses + courses open to register for |
+| POST   | `/api/enrollments`      | `{ userId, classId, rollNo? }` — register a student for a course (checks role, capacity, duplicates) |
+| DELETE | `/api/enrollments`      | `?userId=&classId=` — withdraw from a course         |
 
 ### Students
 | Method | Path                 | Description                                             |
@@ -237,8 +253,8 @@ All endpoints return JSON. Errors use `{ "error": "message" }` with an appropria
 ### Attendance
 | Method | Path                 | Description                                             |
 |--------|----------------------|---------------------------------------------------------|
-| GET    | `/api/attendance`    | Records (`?studentId=&classId=&date=`)                  |
-| POST   | `/api/attendance`    | `{ classId, date, attendanceData: [{ studentId, status }] }` — re-marking the same date adjusts aggregates instead of double counting |
+| GET    | `/api/attendance`    | Records (`?studentId=&classId=&date=`). `studentId` accepts a comma-separated list so several enrollments load in one request |
+| POST   | `/api/attendance`    | `{ classId, date, attendanceData: [{ studentId, status }] }` — **every student must be enrolled in `classId`** or the whole batch is rejected with 403. Re-marking the same date adjusts aggregates instead of double counting |
 
 ### Sessions (live QR attendance)
 | Method | Path                 | Description                                             |
@@ -253,8 +269,8 @@ All endpoints return JSON. Errors use `{ "error": "message" }` with an appropria
 | Method | Path                       | Description                                     |
 |--------|----------------------------|-------------------------------------------------|
 | GET    | `/api/leave-requests`      | `?studentId=&teacherId=&classId=&status=`       |
-| POST   | `/api/leave-requests`      | `{ studentId, studentName, rollNo, subject, date, reason, classId, teacherId }` |
-| PUT    | `/api/leave-requests/:id`  | `{ status: 'Pending' \| 'Approved' \| 'Rejected' }` |
+| POST   | `/api/leave-requests`      | `{ studentId, classId, date, reason }` — requires enrollment; name/roll/subject/teacher are resolved server-side |
+| PUT    | `/api/leave-requests/:id`  | `{ status: 'Pending' \| 'Approved' \| 'Rejected' }` — approving writes a `Leave` attendance record for that date |
 | DELETE | `/api/leave-requests/:id`  | Delete request                                  |
 
 ### Seed
@@ -264,14 +280,19 @@ All endpoints return JSON. Errors use `{ "error": "message" }` with an appropria
 
 ## Testing
 
-With the dev server running and MongoDB up:
-
 ```bash
-bash scripts/api-tests.sh          # 62 end-to-end assertions across all endpoints
-npm run lint                       # ESLint (react-hooks + next rules) — 0 problems
+npm test                           # 39 end-to-end assertions on the API route handlers
+npm run lint                       # ESLint (react-hooks + next rules)
 npm run typecheck                  # tsc --noEmit
 npm run build                      # production build check
 ```
+
+`npm test` needs no database: `tests/memory-models.ts` provides an in-memory
+stand-in for the Mongoose models, and the real route handlers are driven against
+it with actual `Request` objects. The suite covers registration validation,
+course-registration rules (capacity, duplicates, closed enrollment, role checks),
+every path where attendance is gated on enrollment, and the login
+regressions described below.
 
 ## Database Schema Overview
 
@@ -279,8 +300,8 @@ npm run build                      # production build check
 |----------------------|----------------------------------------------------------------|
 | `users`              | Accounts for students, teachers, and the admin (bcrypt hashes) |
 | `faculties`          | Faculty profiles linked to teacher accounts                    |
-| `classes`            | Classes/courses with a per-day `sessionHistory`                |
-| `students`           | Roster entries (student ↔ class enrollment + aggregate stats)  |
+| `classes`            | Courses with `capacity`, `enrollmentOpen`, and a per-day `sessionHistory` |
+| `students`           | **Enrollments** (student ↔ course + aggregate stats). A row here is what authorises attendance for that course |
 | `attendancerecords`  | One record per (student, class, date) — unique index           |
 | `studentattendances` | Subject-wise aggregates + full per-date history                |
 | `leaverequests`      | Leave submissions with Pending/Approved/Rejected status        |
@@ -296,8 +317,21 @@ npm run build                      # production build check
   `localStorage` by `AuthContext` and used for client-side route protection.
   API routes currently trust client-provided IDs; wire a `verifyToken` middleware
   before exposing this publicly.
-- **frontend-analysis/** is the original Vite prototype kept for reference; it is
-  excluded from lint and is not part of the Next.js app.
+- **Route handlers** are wrapped by `route()` from `src/lib/http.ts`, which connects
+  to MongoDB, maps `HttpError` / validation / duplicate-key errors to the right
+  status codes, and keeps handlers free of repetitive try/catch blocks.
+- **Email matching** — stored addresses are not guaranteed to be normalised
+  (Mongoose's `lowercase`/`trim` setters do not apply to query filters, bulk
+  writes, or rows written before the setter existed), so every email lookup goes
+  through `emailFilter()` in `src/lib/http.ts`, which matches case-insensitively
+  and escapes regex metacharacters. Use it for any new email lookup — a plain
+  equality match will reject valid logins.
+- **Bulk attendance** — marking a roster uses `bulkUpsertAttendance()`, which
+  issues a fixed number of round trips (one read plus three bulk writes) instead
+  of ~4 queries per student.
+- **The enrollment rule** lives in `requireEnrollment()` (`src/lib/attendance.ts`)
+  and is enforced by every write path: batch attendance, QR check-in, session
+  finalization, and leave requests.
 
 ## License
 

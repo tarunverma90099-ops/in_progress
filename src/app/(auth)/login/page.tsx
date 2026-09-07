@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
   GraduationCap,
@@ -218,16 +219,6 @@ export default function LoginPage() {
               </div>
             </div>
 
-            <div className="flex items-center justify-between text-sm">
-              <label className="flex items-center gap-2 text-slate-600">
-                <input type="checkbox" className="h-4 w-4 rounded border-slate-300" />
-                Remember me
-              </label>
-              <button type="button" className={`font-medium ${theme.text} hover:underline`}>
-                Forgot password?
-              </button>
-            </div>
-
             <button
               type="submit"
               disabled={loading}
@@ -238,10 +229,16 @@ export default function LoginPage() {
           </form>
 
           <p className="mt-6 text-center text-sm text-slate-500">
-            Don&apos;t have an account?{' '}
-            <button className={`font-medium ${theme.text} hover:underline`}>
-              Contact your administrator
-            </button>
+            {role === 'student' ? (
+              <>
+                Don&apos;t have an account?{' '}
+                <Link href="/register" className={`font-medium ${theme.text} hover:underline`}>
+                  Register as a student
+                </Link>
+              </>
+            ) : (
+              <>Don&apos;t have an account? Contact your administrator.</>
+            )}
           </p>
         </div>
       </main>
