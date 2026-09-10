@@ -114,7 +114,7 @@ const AttendanceStatusModal = ({
   return (
     <div
       onClick={onClose}
-      className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50"
+      className="fixed inset-0 bg-slate-950/55 backdrop-blur-sm flex items-center justify-center z-50"
     >
       <div
         onClick={(e) => e.stopPropagation()}
@@ -163,7 +163,7 @@ const AttendanceSimulatorModal = ({
   };
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+    <div className="fixed inset-0 bg-slate-950/55 backdrop-blur-sm flex items-center justify-center z-50">
       <div className="bg-white rounded-2xl shadow-lg p-8 w-full max-w-2xl max-h-[90vh] flex flex-col">
         <div className="flex justify-between items-center mb-4">
           <h2 className="text-2xl font-bold">Attendance Simulator</h2>
@@ -237,7 +237,7 @@ const LeaveRequestModal = ({
   };
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+    <div className="fixed inset-0 bg-slate-950/55 backdrop-blur-sm flex items-center justify-center z-50">
       <form onSubmit={handleSubmit} className="bg-white rounded-2xl shadow-lg p-8 w-full max-w-lg">
         <div className="flex justify-between items-center mb-6">
           <h2 className="text-2xl font-bold">Request Leave of Absence</h2>

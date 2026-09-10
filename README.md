@@ -1,11 +1,21 @@
-# Syntex Terrors — Attendance Management System
+# Track Attend — Attendance Management System
 
-A full-stack, role-based attendance management system for colleges. Teachers run live
-QR-code attendance sessions, students check in by scanning the QR with their camera,
-and college admins manage faculty — all backed by **Next.js (App Router)**, **MongoDB
-(Mongoose)**, and **JWT authentication**.
+A full-stack, role-based attendance monitoring and analytics platform for colleges and
+schools. Teachers run live QR-code attendance sessions, students check in by scanning
+the QR with their camera, and college admins prove attendance compliance — all backed
+by **Next.js (App Router)**, **MongoDB (Mongoose)**, and **JWT authentication**.
+
+The public landing page at `/` is built on the design system described in
+[Design System](#design-system); the internal dashboards consume the same tokens.
 
 ## Features
+
+### Marketing site (`/`)
+- **Landing page** — sticky glass navbar, hero with a live product mock, social proof,
+  feature bento, four-step product tour, role benefits, customer stories, FAQ
+  and a walkthrough request form
+- **Design system reference** at `/design-system` — colour ramps, type scale,
+  components, surfaces, motion recipes and the accessibility rules
 
 ### For Students
 - **Self-registration** — students create their own account at `/register`
@@ -45,7 +55,7 @@ and college admins manage faculty — all backed by **Next.js (App Router)**, **
 
 | Layer     | Technology                                                        |
 |-----------|-------------------------------------------------------------------|
-| Frontend  | React 19, Next.js 16 (App Router), Tailwind CSS 4, Recharts, react-calendar, qrcode.react, html5-qrcode, lucide-react |
+| Frontend  | React 19, Next.js 16 (App Router), Tailwind CSS 4, Motion (Framer Motion), Recharts, react-calendar, qrcode.react, html5-qrcode, lucide-react, Inter + Geist Mono (self-hosted) |
 | Backend   | Next.js API routes, Mongoose 9, bcryptjs, JSON Web Tokens         |
 | Database  | MongoDB (local or Atlas)                                          |
 
@@ -65,11 +75,24 @@ and college admins manage faculty — all backed by **Next.js (App Router)**, **
 │   │   │   └── teacher/
 │   │   │       ├── page.tsx        # Teacher dashboard
 │   │   │       └── session/[courseName]/  # Live QR session page
+│   │   ├── (marketing)/
+│   │   │   ├── page.tsx            # Landing page (route "/")
+│   │   │   └── design-system/      # Living styleguide
 │   │   ├── api/                    # REST API (see below)
-│   │   ├── globals.css
-│   │   ├── layout.tsx              # Root layout (auth provider)
-│   │   └── page.tsx                # Redirects to /login
+│   │   ├── globals.css             # Design tokens + primitives
+│   │   └── layout.tsx              # Root layout (fonts, metadata, auth)
 │   ├── components/
+│   │   ├── brand/                  # Logo lockup + mark
+│   │   ├── marketing/              # Landing sections
+│   │   │   ├── Hero.tsx  SocialProof.tsx  Features.tsx
+│   │   │   ├── ProductShowcase.tsx  Audiences.tsx  Testimonials.tsx
+│   │   │   ├── Faq.tsx  FinalCta.tsx
+│   │   │   ├── SiteNav.tsx  SiteFooter.tsx
+│   │   │   └── mockups/            # Presentation-only product screenshots
+│   │   ├── motion/                 # Reveal, ScrollProgress, CountUp
+│   │   └── ui/                     # Button, Badge, Card, Container, …
+│   ├── content/landing.ts          # All landing copy, typed
+│   ├── hooks/                      # useActiveSection, useScrolled
 │   ├── contexts/AuthContext.tsx    # JWT + user persisted in localStorage
 │   ├── lib/
 │   │   ├── api.ts                  # Typed fetch client for all endpoints
@@ -80,11 +103,112 @@ and college admins manage faculty — all backed by **Next.js (App Router)**, **
 │       ├── User.ts  Faculty.ts  Class.ts  Student.ts
 │       ├── AttendanceRecord.ts  StudentAttendance.ts
 │       ├── LeaveRequest.ts  Session.ts  index.ts
+├── scripts/                        # Design-QA tooling (not part of the build)
+│   ├── browser.mjs                 # Shared headless-Chromium launcher
+│   ├── screenshot.mjs              # Renders pages to screenshots/
+│   ├── responsive-audit.mjs        # Overflow / tap-target / heading audit
+│   └── contrast-audit.mjs          # WCAG AA contrast sweep
 └── tests/                          # API handler tests (npm test)
     ├── api.test.ts                 # 28 end-to-end route assertions
     ├── memory-models.ts            # In-memory stand-in for the Mongoose models
     └── mongodb-stub.ts
 ```
+
+## Design System
+
+The visual language is shared by the marketing site and every internal page, and is
+documented at **`/design-system`** — a living page rendered from the same components
+that ship, not a static export.
+
+### Where things live
+
+| Concern | Source of truth |
+|---------|-----------------|
+| Colour, type, motion, elevation tokens | `@theme` block in `src/app/globals.css` |
+| Reveal, glass, grid and gradient primitives | `@layer components` in `src/app/globals.css` |
+| Buttons, badges, cards, containers | `src/components/ui/*` |
+| Scroll reveals, progress bar, counters | `src/components/motion/*` |
+| Landing copy (headlines, feature copy, FAQ) | `src/content/landing.ts` |
+
+### Tokens
+
+Brand indigo (`brand-50…950`), accent cyan (`accent-*`) and three semantic status
+colours — present green, absent rose, leave amber. Type is Inter Variable with Geist
+Mono for session codes, roll numbers and timestamps; both are **self-hosted** through
+`@fontsource-variable`, so there is no render-blocking request to Google Fonts.
+
+### Motion
+
+- `.reveal` + `<Reveal>` — a single IntersectionObserver per element toggles
+  `data-revealed`; delays are read from a `--reveal-delay` custom property.
+- `motion/react` handles the hero's scroll-linked tilt, the tab and billing pills
+  (`layoutId`) and the FAQ height animation.
+- Ambient motion (`animate-float`, `animate-drift`, `animate-scanline`) is decorative.
+- **Every** animation is disabled under `prefers-reduced-motion: reduce`, and the
+  reveal effect never hides content when JavaScript is off (a `<noscript>` rule in the
+  root layout restores it, so no DOM mutation is needed before hydration).
+
+### Accessibility
+
+- Skip link, labelled landmarks (`main`, every `nav`, every `section`) and a visible
+  2px focus ring on all interactive elements.
+- AA contrast verified by script, not by eye — `npm run audit:contrast` resolves each
+  text node's effective background (compositing translucent layers through a canvas,
+  so Tailwind v4's `oklch` palette is measured correctly).
+- Decorative product mocks are exposed as single labelled images (`role="img"`) so
+  screen readers get one useful sentence instead of a wall of fake timestamps.
+
+### Design QA tooling
+
+```bash
+npm run dev                       # or: npm run build && npm run start
+npm run screenshots               # full-page + per-section PNGs → screenshots/
+npm run audit:responsive         # overflow, tap targets, heading order, 320→1920px
+npm run audit:contrast           # WCAG AA sweep across the marketing + app routes
+```
+
+These scripts drive a headless browser, which is **not** a project dependency — that
+keeps ~50 MB of Chromium out of everyone's `npm install`. Pick one:
+
+```bash
+# A) Use a Chrome you already have
+CHROME_PATH="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" npm run screenshots
+
+# B) Install a bundled Chromium (no download from Google's CDN needed)
+npm i -D @sparticuz/chromium puppeteer-core
+
+# C) Any other Chromium/Chrome build
+CHROME_PATH=/usr/bin/chromium npm run audit:contrast
+```
+
+`scripts/browser.mjs` resolves the browser in that order and prints the install
+command if it finds none. Output lands in `screenshots/`, which is git-ignored.
+
+### Reusing the system on new pages
+
+```tsx
+import { Container } from "@/components/ui/Container";
+import { SectionHeading } from "@/components/ui/SectionHeading";
+import { Surface } from "@/components/ui/Card";
+import { Reveal } from "@/components/motion/Reveal";
+
+<Container>
+  <SectionHeading align="left" eyebrow="Reports" title="Monthly register" />
+  <Reveal delay={80}>
+    <Surface className="p-6">…</Surface>
+  </Reveal>
+</Container>
+```
+
+Two conventions worth keeping:
+
+1. **Add a variant, don't recolour from outside.** Utility classes from a `className`
+   prop tie with a component's own utilities, and the stylesheet order decides the
+   winner — which has already produced invisible white-on-white text once. Extend the
+   `VARIANT` map instead.
+2. **Don't set colour on `h1–h4` globally.** Dark panels inherit `text-white` from a
+   wrapper; a global heading colour would override that inheritance and render the
+   heading invisible.
 
 ## Setup Instructions
 
@@ -163,7 +287,7 @@ npm run build
 npm run start
 ```
 
-Open http://localhost:3000 (redirects to the login page).
+Open http://localhost:3000 for the landing page, or /login for the app.
 
 ## Test Credentials (after seeding)
 
@@ -285,6 +409,11 @@ npm test                           # 39 end-to-end assertions on the API route h
 npm run lint                       # ESLint (react-hooks + next rules)
 npm run typecheck                  # tsc --noEmit
 npm run build                      # production build check
+
+# Design QA (needs a running server + a Chromium build — see Design System)
+npm run screenshots                # page and section PNGs
+npm run audit:responsive           # 320px → 1920px overflow and target audit
+npm run audit:contrast             # WCAG AA contrast sweep
 ```
 
 `npm test` needs no database: `tests/memory-models.ts` provides an in-memory

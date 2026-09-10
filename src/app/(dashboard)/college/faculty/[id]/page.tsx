@@ -227,7 +227,7 @@ export default function FacultyProfile() {
 
       {/* Add Subject Modal */}
       {isModalOpen && (
-        <div className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-40 z-50">
+        <div className="fixed inset-0 flex items-center justify-center bg-slate-950/50 backdrop-blur-sm z-50">
           <div className="bg-white rounded-lg shadow-lg p-6 w-96">
             <h2 className="text-lg font-semibold mb-4">Add New Subject</h2>
             <input
@@ -257,7 +257,7 @@ export default function FacultyProfile() {
 
       {/* Remove Faculty Confirmation Modal */}
       {isRemoveModalOpen && (
-        <div className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-40 z-50">
+        <div className="fixed inset-0 flex items-center justify-center bg-slate-950/50 backdrop-blur-sm z-50">
           <div className="bg-white rounded-lg shadow-lg p-6 w-96">
             <h2 className="text-lg font-semibold mb-4 text-red-600">
               This action cannot be undone. Proceed?
