@@ -127,7 +127,7 @@ export default function RegisterPage() {
             <span className="text-lg font-semibold text-slate-900">Track Attend</span>
           </div>
 
-          <div className="flex items-center gap-2 text-orange-600">
+          <div className="flex items-center gap-2 text-orange-700">
             <GraduationCap className="h-6 w-6" />
             <span className="text-sm font-medium uppercase tracking-wide">Student registration</span>
           </div>
@@ -232,7 +232,7 @@ export default function RegisterPage() {
             <button
               type="submit"
               disabled={loading}
-              className="w-full rounded-xl bg-orange-600 py-2.5 font-semibold text-white shadow-sm transition hover:bg-orange-700 disabled:opacity-50"
+              className="w-full rounded-xl bg-orange-700 py-2.5 font-semibold text-white shadow-sm transition hover:bg-orange-800 disabled:opacity-50"
             >
               {loading ? 'Creating account...' : 'Create student account'}
             </button>
@@ -240,7 +240,7 @@ export default function RegisterPage() {
 
           <p className="mt-6 text-center text-sm text-slate-500">
             Already have an account?{' '}
-            <Link href="/login" className="font-medium text-orange-600 hover:underline">
+            <Link href="/login" className="font-medium text-orange-700 hover:underline">
               Sign in
             </Link>
           </p>

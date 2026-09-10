@@ -1,58 +1,599 @@
 @import "tailwindcss";
 
-/* Calendar Styles */
+/* ============================================================================
+   Track Attend — design system
+   ----------------------------------------------------------------------------
+   Single source of truth for tokens (colour, type, elevation, motion) and the
+   few composite primitives the product shares. Everything else is composed
+   from Tailwind utilities inside components, so later internal pages
+   (dashboard, reports, timetables) inherit the same language for free.
+
+   Layers
+     1. Theme tokens      → exposed to Tailwind as utilities (bg-brand-600, …)
+     2. Base              → document defaults, focus, selection, scrollbars
+     3. Components        → .reveal, glass, gradient + pattern primitives
+     4. Accessibility     → reduced motion, forced colours, print
+   ============================================================================ */
+
+@theme {
+  /* --- Type -------------------------------------------------------------- */
+  --font-sans: "Inter Variable", ui-sans-serif, system-ui, -apple-system,
+    "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "Geist Mono Variable", ui-monospace, SFMono-Regular, Menlo,
+    Consolas, monospace;
+
+  --text-display: 4.5rem;
+  --text-display--line-height: 1.03;
+  --text-display--letter-spacing: -0.035em;
+  --text-display--font-weight: 600;
+
+  /* --- Brand ramp (indigo → violet) ------------------------------------- */
+  --color-brand-50: #eef2ff;
+  --color-brand-100: #e0e7ff;
+  --color-brand-200: #c7d2fe;
+  --color-brand-300: #a5b4fc;
+  --color-brand-400: #818cf8;
+  --color-brand-500: #6366f1;
+  --color-brand-600: #4f46e5;
+  --color-brand-700: #4338ca;
+  --color-brand-800: #3730a3;
+  --color-brand-900: #312e81;
+  --color-brand-950: #1e1b4b;
+
+  /* --- Accent ramp (sky → teal) — data, "live" states, charts ------------ */
+  --color-accent-50: #ecfeff;
+  --color-accent-100: #cffafe;
+  --color-accent-300: #67e8f9;
+  --color-accent-400: #22d3ee;
+  --color-accent-500: #06b6d4;
+  --color-accent-600: #0891b2;
+  --color-accent-700: #0e7490;
+
+  /* --- Status (attendance semantics) ------------------------------------ */
+  --color-status-present: #059669;
+  --color-status-absent: #e11d48;
+  --color-status-leave: #d97706;
+
+  /* --- Surfaces ---------------------------------------------------------- */
+  --color-canvas: #fbfbfe;
+  --color-surface: #ffffff;
+  --color-ink: #0a0f1f;
+  --color-ink-soft: #111832;
+  --color-ink-muted: #1c2544;
+  --color-hairline: #e8eaf3;
+
+  /* --- Elevation --------------------------------------------------------- */
+  --shadow-card: 0 1px 2px rgb(15 23 42 / 0.04),
+    0 12px 32px -18px rgb(15 23 42 / 0.18);
+  --shadow-lift: 0 2px 6px rgb(15 23 42 / 0.04),
+    0 32px 64px -32px rgb(49 46 129 / 0.38);
+  --shadow-glow: 0 24px 60px -26px rgb(79 70 229 / 0.55);
+  --shadow-inset-hairline: inset 0 1px 0 0 rgb(255 255 255 / 0.6);
+
+  /* --- Motion ------------------------------------------------------------ */
+  --ease-brand: cubic-bezier(0.22, 0.68, 0.24, 1);
+
+  --animate-float: float 18s var(--ease-brand) infinite;
+  --animate-float-soft: float-soft 9s var(--ease-brand) infinite;
+  --animate-float-slow: float 26s var(--ease-brand) infinite;
+  --animate-drift: drift 22s var(--ease-brand) infinite;
+  --animate-marquee: marquee 42s linear infinite;
+  --animate-scanline: scanline 3s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+  --animate-pulse-ring: pulse-ring 2.6s cubic-bezier(0.22, 0.68, 0.24, 1)
+    infinite;
+  --animate-sheen: sheen 5.5s ease-in-out infinite;
+  --animate-rise: rise 0.7s var(--ease-brand) both;
+  --animate-bar-grow: bar-grow 1.1s var(--ease-brand) both;
+
+  @keyframes float {
+    0%,
+    100% {
+      transform: translate3d(0, 0, 0) scale(1);
+    }
+    50% {
+      transform: translate3d(0, -18px, 0) scale(1.02);
+    }
+  }
+
+  @keyframes float-soft {
+    0%,
+    100% {
+      transform: translate3d(0, 0, 0);
+    }
+    50% {
+      transform: translate3d(0, -7px, 0);
+    }
+  }
+
+  @keyframes drift {
+    0% {
+      transform: translate3d(0, 0, 0);
+    }
+    33% {
+      transform: translate3d(24px, -20px, 0);
+    }
+    66% {
+      transform: translate3d(-18px, 14px, 0);
+    }
+    100% {
+      transform: translate3d(0, 0, 0);
+    }
+  }
+
+  @keyframes marquee {
+    from {
+      transform: translate3d(0, 0, 0);
+    }
+    to {
+      transform: translate3d(-50%, 0, 0);
+    }
+  }
+
+  @keyframes scanline {
+    0% {
+      transform: translateY(-6%);
+      opacity: 0;
+    }
+    12% {
+      opacity: 1;
+    }
+    88% {
+      opacity: 1;
+    }
+    100% {
+      transform: translateY(604%);
+      opacity: 0;
+    }
+  }
+
+  @keyframes pulse-ring {
+    0% {
+      transform: scale(0.9);
+      opacity: 0.7;
+    }
+    70% {
+      transform: scale(2.1);
+      opacity: 0;
+    }
+    100% {
+      transform: scale(2.1);
+      opacity: 0;
+    }
+  }
+
+  @keyframes sheen {
+    0%,
+    100% {
+      transform: translateX(-120%);
+    }
+    55%,
+    60% {
+      transform: translateX(220%);
+    }
+  }
+
+  @keyframes rise {
+    from {
+      opacity: 0;
+      transform: translate3d(0, 14px, 0);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+
+  @keyframes bar-grow {
+    from {
+      transform: scaleY(0.04);
+    }
+    to {
+      transform: scaleY(1);
+    }
+  }
+}
+
+/* ============================================================================
+   2. Base
+   ============================================================================ */
+
+@layer base {
+  html {
+    /* `data-scroll-behavior="smooth"` on <html> (root layout) tells the Next
+       router to skip smooth scrolling on route changes while keeping it for
+       in-page anchors like #features. */
+    scroll-behavior: smooth;
+    -webkit-text-size-adjust: 100%;
+    scrollbar-gutter: stable;
+  }
+
+  body {
+    background-color: var(--color-canvas);
+    color: #334155; /* slate-700 — AA on canvas */
+    font-family: var(--font-sans);
+    font-feature-settings: "cv11" 1, "ss01" 1;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Headings deliberately do NOT set a colour. Dark panels (login aside,
+     student verify screen, ink sections) set `text-white` on a wrapper, and a
+     global colour rule here would win over that inheritance and render those
+     headings invisible. Surfaces own their text colour instead. */
+  h1,
+  h2,
+  h3,
+  h4 {
+    letter-spacing: -0.02em;
+    text-wrap: balance;
+  }
+
+  p {
+    text-wrap: pretty;
+  }
+
+  /* Visible, consistent keyboard focus everywhere. */
+  :focus-visible {
+    outline: 2px solid var(--color-brand-600);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+
+  ::selection {
+    background: color-mix(in oklab, var(--color-brand-500) 26%, transparent);
+    color: #1e1b4b;
+  }
+
+  /* Product-grade scrollbars (marketing + dashboards). */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #cbd5e1 transparent;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: #cbd5e1;
+    border: 3px solid transparent;
+    background-clip: content-box;
+    border-radius: 999px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: #94a3b8;
+    background-clip: content-box;
+  }
+}
+
+/* ============================================================================
+   3. Components & primitives
+   ============================================================================ */
+
+@layer components {
+  /* --- Scroll reveal ------------------------------------------------------
+     Reveal is opt-in and additive: without JS (or before hydration) the
+     `no-js` guard below keeps content visible, and reduced-motion turns the
+     transition off entirely. */
+  .reveal {
+    opacity: 0;
+    transform: translate3d(0, 22px, 0) scale(0.994);
+    transition:
+      opacity 0.75s var(--ease-brand),
+      transform 0.75s var(--ease-brand),
+      filter 0.75s var(--ease-brand);
+    transition-delay: var(--reveal-delay, 0ms);
+    filter: blur(4px);
+    will-change: opacity, transform;
+  }
+
+  .reveal[data-direction="left"] {
+    transform: translate3d(-28px, 0, 0) scale(0.994);
+  }
+
+  .reveal[data-direction="right"] {
+    transform: translate3d(28px, 0, 0) scale(0.994);
+  }
+
+  .reveal[data-direction="none"] {
+    transform: scale(0.99);
+  }
+
+  .reveal[data-revealed="true"] {
+    opacity: 1;
+    transform: none;
+    filter: blur(0);
+  }
+
+  /* --- Surfaces ----------------------------------------------------------- */
+  .glass {
+    background: rgb(255 255 255 / 0.72);
+    backdrop-filter: blur(18px) saturate(180%);
+    -webkit-backdrop-filter: blur(18px) saturate(180%);
+    border: 1px solid rgb(255 255 255 / 0.7);
+    box-shadow:
+      var(--shadow-inset-hairline),
+      0 1px 2px rgb(15 23 42 / 0.04),
+      0 18px 40px -24px rgb(15 23 42 / 0.25);
+  }
+
+  .glass-dark {
+    background: rgb(10 15 31 / 0.55);
+    backdrop-filter: blur(18px) saturate(160%);
+    -webkit-backdrop-filter: blur(18px) saturate(160%);
+    border: 1px solid rgb(255 255 255 / 0.1);
+  }
+
+  .hairline {
+    border: 1px solid var(--color-hairline);
+  }
+
+  /* Pointer-tracked highlight used by feature and role cards. */
+  .spotlight {
+    position: relative;
+    isolation: isolate;
+  }
+
+  .spotlight::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background: radial-gradient(
+      380px circle at var(--spot-x, 50%) var(--spot-y, 0%),
+      rgb(99 102 241 / 0.14),
+      transparent 65%
+    );
+    opacity: 0;
+    transition: opacity 0.4s var(--ease-brand);
+    pointer-events: none;
+    z-index: -1;
+  }
+
+  .spotlight:hover::before,
+  .spotlight:focus-within::before {
+    opacity: 1;
+  }
+
+  /* --- Patterns ----------------------------------------------------------- */
+  .bg-grid {
+    background-image:
+      linear-gradient(to right, rgb(15 23 42 / 0.055) 1px, transparent 1px),
+      linear-gradient(to bottom, rgb(15 23 42 / 0.055) 1px, transparent 1px);
+    background-size: 58px 58px;
+  }
+
+  .bg-grid-dark {
+    background-image:
+      linear-gradient(to right, rgb(255 255 255 / 0.06) 1px, transparent 1px),
+      linear-gradient(to bottom, rgb(255 255 255 / 0.06) 1px, transparent 1px);
+    background-size: 58px 58px;
+  }
+
+  .bg-dots {
+    background-image: radial-gradient(rgb(15 23 42 / 0.14) 1px, transparent 1px);
+    background-size: 22px 22px;
+  }
+
+  .mask-fade-y {
+    mask-image: linear-gradient(
+      to bottom,
+      transparent,
+      #000 14%,
+      #000 78%,
+      transparent
+    );
+    -webkit-mask-image: linear-gradient(
+      to bottom,
+      transparent,
+      #000 14%,
+      #000 78%,
+      transparent
+    );
+  }
+
+  .mask-fade-x {
+    mask-image: linear-gradient(
+      to right,
+      transparent,
+      #000 10%,
+      #000 90%,
+      transparent
+    );
+    -webkit-mask-image: linear-gradient(
+      to right,
+      transparent,
+      #000 10%,
+      #000 90%,
+      transparent
+    );
+  }
+
+  /* --- Type treatments ---------------------------------------------------- */
+  .text-gradient {
+    background-image: linear-gradient(
+      100deg,
+      var(--color-brand-600) 0%,
+      #7c3aed 42%,
+      var(--color-accent-600) 100%
+    );
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  .text-gradient-soft {
+    background-image: linear-gradient(
+      180deg,
+      #ffffff 12%,
+      rgb(199 210 254 / 0.82) 100%
+    );
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  .balance {
+    text-wrap: balance;
+  }
+
+  /* --- Decorative helpers ------------------------------------------------- */
+  .glow-blob {
+    position: absolute;
+    border-radius: 999px;
+    filter: blur(72px);
+    opacity: 0.55;
+    pointer-events: none;
+    z-index: -1;
+  }
+
+  .sheen {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    border-radius: inherit;
+    pointer-events: none;
+  }
+
+  .sheen::after {
+    content: "";
+    position: absolute;
+    top: -60%;
+    bottom: -60%;
+    width: 42%;
+    rotate: 18deg;
+    background: linear-gradient(
+      90deg,
+      transparent,
+      rgb(255 255 255 / 0.55),
+      transparent
+    );
+    animation: var(--animate-sheen);
+  }
+
+  /* --- Marquee ------------------------------------------------------------ */
+  .marquee-track {
+    animation: var(--animate-marquee);
+  }
+
+  .marquee:hover .marquee-track,
+  .marquee:focus-within .marquee-track {
+    animation-play-state: paused;
+  }
+
+  /* --- Charts / data viz (dashboard + reports reuse) ---------------------- */
+  .spark-bar {
+    transform-origin: bottom;
+    animation: var(--animate-bar-grow);
+  }
+}
+
+/* ============================================================================
+   4. Accessibility & resilience
+   ============================================================================ */
+
+/* Content must never be hidden purely because JS did not run — the override
+   lives in a <noscript> style block in the root layout, which avoids mutating
+   <html> before hydration. */
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .reveal,
+  .reveal[data-revealed="true"] {
+    opacity: 1 !important;
+    transform: none !important;
+    filter: none !important;
+  }
+
+  .sheen::after,
+  .glow-blob {
+    animation: none !important;
+  }
+}
+
+@media (forced-colors: active) {
+  .glass,
+  .glass-dark {
+    border: 1px solid CanvasText;
+    background: Canvas;
+  }
+
+  .text-gradient,
+  .text-gradient-soft {
+    color: CanvasText;
+    background: none;
+  }
+}
+
+@media print {
+  .glow-blob,
+  .sheen,
+  .marquee-track {
+    display: none !important;
+  }
+
+  .reveal {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* ============================================================================
+   Legacy primitives kept for the existing dashboard surfaces
+   ============================================================================ */
+
 .react-calendar {
   width: 100%;
   border: none;
-  font-family: 'Inter', sans-serif;
+  font-family: var(--font-sans);
 }
 
 .react-calendar__navigation button {
-  font-size: 1.2rem;
-  font-weight: bold;
+  font-size: 1.05rem;
+  font-weight: 600;
+  border-radius: 10px;
 }
 
 .react-calendar__tile {
-  font-size: 1rem;
-  padding: 1.5em 0.5em;
-  border-radius: 8px;
-  transition: all 0.2s ease;
+  font-size: 0.95rem;
+  padding: 1.4em 0.5em;
+  border-radius: 10px;
+  transition: background-color 0.2s var(--ease-brand);
 }
 
 .react-calendar__tile:hover {
-  background: #f0f0f0;
+  background: var(--color-brand-50);
 }
 
 .react-calendar__tile--active {
-  background: #2563eb !important;
-  color: white !important;
-  font-weight: bold;
+  background: var(--color-brand-600) !important;
+  color: #fff !important;
+  font-weight: 600;
 }
 
 .react-calendar__tile--now {
-  background: #dbeafe !important;
-  font-weight: bold;
+  background: var(--color-brand-100) !important;
+  font-weight: 600;
 }
 
 .react-calendar__month-view__days__day--weekend {
-  color: #ef4444;
-}
-
-/* Scrollbar Styles */
-::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-}
-
-::-webkit-scrollbar-track {
-  background: #f1f1f1;
-}
-
-::-webkit-scrollbar-thumb {
-  background: #888;
-  border-radius: 4px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: #555;
+  color: #e11d48;
 }

@@ -22,10 +22,10 @@ const ROLES = {
   student: {
     label: 'Student',
     icon: GraduationCap,
-    accent: 'bg-orange-600 hover:bg-orange-700',
-    ring: 'focus:ring-orange-200 focus:border-orange-500',
-    chip: 'bg-orange-600 text-white border-orange-600',
-    text: 'text-orange-600',
+    accent: 'bg-orange-700 hover:bg-orange-800',
+    ring: 'focus:ring-orange-200 focus:border-orange-600',
+    chip: 'bg-orange-700 text-white border-orange-700',
+    text: 'text-orange-700',
     route: '/student',
   },
   teacher: {

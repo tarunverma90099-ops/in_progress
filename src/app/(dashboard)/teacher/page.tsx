@@ -846,7 +846,7 @@ export default function TeacherDashboard() {
     <div className="min-h-screen flex bg-gray-100">
       {/* Modals */}
       {isModalOpen && (
-        <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50">
+        <div className="fixed inset-0 bg-slate-950/50 backdrop-blur-sm flex items-center justify-center z-50">
           <div className="bg-white rounded-xl shadow-lg p-6 w-96">
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-xl font-semibold">Start New Class</h2>
@@ -881,7 +881,7 @@ export default function TeacherDashboard() {
       )}
 
       {isAtRiskModalOpen && (
-        <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50">
+        <div className="fixed inset-0 bg-slate-950/50 backdrop-blur-sm flex items-center justify-center z-50">
           <div className="bg-white rounded-xl shadow-lg p-6 w-full max-w-lg max-h-[90vh] flex flex-col">
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-xl font-semibold text-red-600">At-Risk Students Report</h2>
@@ -909,7 +909,7 @@ export default function TeacherDashboard() {
       )}
 
       {isAddStudentModalOpen && (
-        <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50">
+        <div className="fixed inset-0 bg-slate-950/50 backdrop-blur-sm flex items-center justify-center z-50">
           <form onSubmit={handleAddStudentSubmit} className="bg-white rounded-xl shadow-lg p-6 w-96">
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-xl font-semibold">Add Student to {currentClass?.name}</h2>
@@ -963,7 +963,7 @@ export default function TeacherDashboard() {
       )}
 
       {isRenameModalOpen && (
-        <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50">
+        <div className="fixed inset-0 bg-slate-950/50 backdrop-blur-sm flex items-center justify-center z-50">
           <form onSubmit={handleRenameSubmit} className="bg-white rounded-xl shadow-lg p-6 w-96">
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-xl font-semibold">Rename Class</h2>
@@ -1000,7 +1000,7 @@ export default function TeacherDashboard() {
       )}
 
       {isManualEntryModalOpen && (
-        <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50 backdrop-blur-sm">
+        <div className="fixed inset-0 bg-slate-950/50 backdrop-blur-sm flex items-center justify-center z-50 backdrop-blur-sm">
           <form onSubmit={handleManualEntrySubmit} className="bg-white rounded-2xl shadow-2xl p-8 w-full max-w-lg">
             <div className="flex justify-between items-center mb-6 pb-3 border-b">
               <div className="flex items-center gap-3">
@@ -1101,7 +1101,7 @@ export default function TeacherDashboard() {
       )}
 
       {isAttendanceModalOpen && (
-        <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50">
+        <div className="fixed inset-0 bg-slate-950/50 backdrop-blur-sm flex items-center justify-center z-50">
           <div className="bg-white rounded-xl shadow-lg p-6 w-96">
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-xl font-semibold">Select Attendance Constraints</h2>
