@@ -351,22 +351,11 @@ export interface Testimonial {
 
 export const testimonials: Testimonial[] = [
   {
-    id: "registrar",
-    quote:
-      "Our NAAC cycle used to open with four weeks of chasing departments for attendance registers. Last cycle we exported an entire academic year — every department, every subject, cross-checked against faculty workload — in a single afternoon. The peer team asked how our numbers tallied so cleanly, and the honest answer was Track Attend.",
-    name: "Dr. Meera Iyer",
-    role: "Registrar",
-    org: "Brightwood Institute of Technology, Pune",
-    initials: "MI",
-    featured: true,
-    stat: { value: "4 weeks → 1 afternoon", label: "accreditation evidence preparation" },
-  },
-  {
     id: "faculty",
     quote:
       "I used to lose the first ten minutes of a 9 a.m. lecture to roll call. Now the QR is up before the projector warms and I start teaching. My first-year batch hasn't had a proxy entry all semester.",
     name: "Dr. Sweta Choubey",
-    role: "Faculty — Digital Circuits & Embedded Systems",
+    role: "Assistant Professor — Environmental Chemistry",
     org: "Department of Basic Science & Humanities",
     initials: "SC",
     stat: { value: "9 min", label: "returned to every lecture" },
@@ -377,7 +366,7 @@ export const testimonials: Testimonial[] = [
       "The Monday shortage digest reaches mentors automatically. We intervene in week four now instead of the week before the exam form goes out.",
     name: "Prof. Prashant Sahu",
     role: "Head of Department — Environmental Chemistry",
-    org: "Northgate College of Engineering, Nagpur",
+    org: "cgit raipur, chhattishgarh, india",
     initials: "PS",
   },
   {
@@ -394,8 +383,8 @@ export const testimonials: Testimonial[] = [
     quote:
       "Rollout took one staff meeting. 140 faculty were marking sessions the next morning, and I stopped chasing registers for the dean's report entirely.",
     name: "Dr. Shashi Bala Kindo",
-    role: "Dean of Academics",
-    org: "Sunridge College of Commerce, Indore",
+    role: "lab assistent professor",
+    org: "cgit raipur, chhattishgarh, india",
     initials: "SK",
     stat: { value: "140", label: "faculty onboarded in a day" },
   },
@@ -479,10 +468,9 @@ export const integrations: Integration[] = [
 ];
 
 export const contact = {
-  salesEmail: "sales@trackattend.app",
   supportEmail: "help@trackattend.app",
-  phone: "+91 80 4718 2200",
-  address: "Track Attend Labs, 4th Floor, Rustomjee Central Park, Andheri East, Mumbai 400093",
+  phone: "+91 982 600 1234",
+  address: "cgit boys hostel room 5, ground floor, cgit campus, raipur, chhattishgarh, india",
   hours: "Support 8 a.m. – 8 p.m. IST, Monday to Saturday",
 };
 
